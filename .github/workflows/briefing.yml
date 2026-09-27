@@ -49,10 +49,10 @@ jobs:
           WU_API_KEY: ${{ secrets.WU_API_KEY }}
         run: python briefing.py
 
-      - name: Deploy to Cloudflare Pages
+      - name: Deploy to Cloudflare
         if: steps.gate.outputs.run == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy out --project-name=ra-briefing --branch=main --commit-dirty=true
+          command: deploy

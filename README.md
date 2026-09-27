@@ -46,16 +46,16 @@ GOOD is 75 and up, MARGINAL 50–74, POOR 25–49, NO-GO below 25. Thresholds ar
 
 This is decision support only, not an official briefing.
 
-## Hosted deployment (GitHub Actions → Cloudflare Pages)
+## Hosted deployment (GitHub Actions → Cloudflare)
 
-`.github/workflows/briefing.yml` runs at 9:00 America/Denver every day. It builds the briefing and deploys `out/` to the Cloudflare Pages project `ra-briefing`. Put the site behind Cloudflare Access to keep it private. You can also start a run by hand from the Actions tab.
+`.github/workflows/briefing.yml` runs at 9:00 America/Denver every day. It builds the briefing and deploys `out/` as static assets on the Cloudflare Worker `ra-briefing` (`wrangler.jsonc`). Put the site behind Cloudflare Access to keep it private. You can also start a run by hand from the Actions tab.
 
 In CI the narrative comes from the Claude API (`claude-opus-5`, with server-side refusal fallback) instead of the local `claude` CLI. The radar images are sent inline.
 
 | Repo secret | Required | Notes |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | for narrative | From console.anthropic.com |
-| `CLOUDFLARE_API_TOKEN` | yes | Token with **Cloudflare Pages: Edit** permission |
+| `CLOUDFLARE_API_TOKEN` | yes | Token from the **Edit Cloudflare Workers** template |
 | `CLOUDFLARE_ACCOUNT_ID` | yes | Shown by `npx wrangler whoami` |
 | `FAA_CLIENT_ID` / `FAA_CLIENT_SECRET` | optional | NOTAMs and FICONs |
 | `WU_API_KEY` | optional | Weather Underground PWS |

@@ -1,0 +1,6 @@
+{
+  "name": "ra-briefing",
+  "compatibility_date": "2026-09-01",
+  // Static site: the briefing page and radar fallback images built into out/.
+  "assets": { "directory": "./out" }
+}
