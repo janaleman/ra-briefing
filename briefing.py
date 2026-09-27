@@ -885,6 +885,7 @@ def main():
         afd_txt = "\n\n".join(f"[{a['office']} {a['title']}]\n{a['text']}" for a in afd_ex)
         ai_html, ai_status = ai_narrative(json.dumps(compact, default=str), afd_txt, "\n".join(fa_synopsis), radar_files)
     SOURCES["Claude narrative"] = ai_status
+    print(f"  narrative: {ai_status}", flush=True)
 
     page = render(now, results, gap_villages, zones, fa_synopsis, wa, aawu_sig, isig, gairmets, sig_pireps,
                   alerts, afd_ex, pa, precip_now, ai_html, notam_status)
