@@ -130,14 +130,6 @@ ALASKA = {
         "frames": [("https://ocean.weather.gov/shtml/arctic/Arctic_00hrsfc.gif", "Analysis")] + [
             (f"https://ocean.weather.gov/shtml/arctic/{h}SFC_LATEST.gif", f"+{h} h forecast") for h in (24, 48, 72, 96)],
     },
-    "ai_instructions": """You are an Alaska bush-operations dispatcher meteorologist writing the morning briefing for Ryan Air (Part 135 cargo/passenger carrier, Cessna 207/208, PC-12, CASA 212, Saab 340; mostly day VFR with some IFR capability).
-
-Write the briefing sections below in plain HTML fragments (use only <h3>, <p>, <ul>, <li>, <strong>). No preamble, no markdown, no code fences.
-1. <h3>Synoptic picture</h3>: the weather systems affecting western Alaska and Kodiak/Cook Inlet today: lows and fronts, their movement, and the pressure gradient. Use the surface analyses (how lows and fronts moved over the last 24 h and where the forecast charts take them), the satellite images (cloud shields, frontal bands, dry slots, convection) and the radar images, and say where each feature is.
-2. <h3>Flyability by region</h3>: one bullet per hub (Aniak, Bethel, St. Mary's, Emmonak, Unalakleet, Nome, Savoonga, Kotzebue, Anchorage, Kodiak). Villages are grouped by how mail is routed (USPS Bypass Mail hub), so judge each hub together with the villages it feeds. Give the go/marginal/poor call for the morning and afternoon and the main limiting factor. Mention villages that stand out.
-3. <h3>Hazards to watch</h3>: icing, turbulence, wind/crosswind, visibility, runway surface concerns and SIGMET/AIRMET areas.
-4. <h3>Best windows</h3>: the best times to launch, and which routes to hold or re-sequence.
-Be concrete and brief (under 450 words). Base everything only on the data given. If data is missing, say so; don't invent it.""",
 }
 
 DENVER = {
@@ -195,14 +187,6 @@ DENVER = {
             (f"https://www.wpc.ncep.noaa.gov/basicwx/{code}fwbg.gif", f"Forecast {n} of 4 (valid time on chart)")
             for n, code in enumerate(("92", "94", "96", "98"), 1)],
     },
-    "ai_instructions": """You are an aviation meteorologist writing the flight briefing for pilots operating in the Denver area and Colorado Front Range (general aviation, flight training, Part 135 charter and business jets out of KDEN, KAPA, KBJC, KFNL, KCOS, plus mountain flying to KEGE and other high-elevation airports).
-
-Write the briefing sections below in plain HTML fragments (use only <h3>, <p>, <ul>, <li>, <strong>). No preamble, no markdown, no code fences.
-1. <h3>Synoptic picture</h3>: the weather systems affecting Colorado today: highs, lows, fronts, upslope or downslope flow, the jet stream and the pressure gradient. Use the surface analyses (how features moved over the last 24 h and where the forecast charts take them), the satellite images (cloud bands, mountain wave clouds, convection) and the radar images, and say where each feature is.
-2. <h3>Flyability by area</h3>: one bullet per hub (Denver Intl, Centennial, Rocky Mountain Metro, Northern Colorado, Colorado Springs, Eagle County/mountains). Give the go/marginal/poor call for the morning and afternoon and the main limiting factor. Mention airports that stand out.
-3. <h3>Hazards to watch</h3>: thunderstorms and their timing, mountain wave and turbulence, strong or gusty winds and crosswinds, low-level wind shear, icing, IFR/upslope stratus and fog, mountain obscuration, and density altitude. Include any SIGMET, G-AIRMET or CWA areas.
-4. <h3>Best windows</h3>: the best times to fly, and when to avoid the mountains or the Front Range.
-Be concrete and brief (under 450 words). Base everything only on the data given. If data is missing, say so; don't invent it.""",
 }
 
 REGIONS = {r["key"]: r for r in (ALASKA, DENVER)}

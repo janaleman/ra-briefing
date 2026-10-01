@@ -12,8 +12,8 @@ alerts, point forecasts), NEXRAD RIDGE radar imagery, Open-Meteo (model
 forecast for villages with no weather station), optional Weather Underground
 PWS (WU_API_KEY) and optional FAA NOTAM API (FAA_CLIENT_ID/FAA_CLIENT_SECRET).
 
-Stdlib only (plus `anthropic` for the API narrative).
-Usage: python3 briefing.py [--region alaska|denver] [--no-ai] [--open]
+Stdlib only.
+Usage: python3 briefing.py [--region alaska|denver] [--open]
 """
 
 import argparse
@@ -24,7 +24,6 @@ import json
 import math
 import os
 import re
-import shutil
 import subprocess
 import sys
 import urllib.parse
@@ -738,90 +737,12 @@ def pressure_analysis(latest):
     return {"low": lo, "high": hi, "fall": fall, "rise": rise, "gradient": round(hi[1] - lo[1], 1), "n": len(rows)}
 
 
-# ---------------------------------------------------------------- AI narrative
-
-def ai_data(summary_json, afd_text, fa_synopsis):
-    return f"""Area forecast synopsis:
-{fa_synopsis or "n/a"}
-
-NWS forecast discussion excerpts:
-{afd_text[:6000]}
-
-Computed station data (JSON):
-{summary_json[:24000]}
-"""
-
-
-def clean_html(txt):
-    return re.sub(r"^```(?:html)?|```$", "", txt, flags=re.M).strip()
-
-
-def ai_narrative_api(summary_json, afd_text, fa_synopsis, images):
-    """Claude API path (used in CI). Images are sent inline."""
-    import base64
-    import anthropic
-
-    client = anthropic.Anthropic()
-    content = []
-    for label, f in images:
-        mt = "image/jpeg" if f.endswith(".jpg") else "image/png" if f.endswith(".png") else "image/gif"
-        content.append({"type": "text", "text": label})
-        content.append({"type": "image", "source": {"type": "base64", "media_type": mt,
-                                                    "data": base64.standard_b64encode(Path(f).read_bytes()).decode()}})
-    content.append({"type": "text", "text": ai_data(summary_json, afd_text, fa_synopsis)})
-    try:
-        resp = client.beta.messages.create(
-            model=os.environ.get("BRIEFING_MODEL", "claude-opus-5"),
-            max_tokens=16000,
-            thinking={"type": "adaptive"},
-            output_config={"effort": "medium"},
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            system=CFG["ai_instructions"],
-            messages=[{"role": "user", "content": content}],
-        )
-    except anthropic.APIStatusError as e:
-        return None, f"API error {e.status_code}: {e.message}"[:200]
-    except anthropic.APIConnectionError as e:
-        return None, f"API connection error: {e}"[:200]
-    if resp.stop_reason == "refusal":
-        return None, "model declined the request"
-    txt = "".join(b.text for b in resp.content if b.type == "text")
-    return (clean_html(txt), "ok") if txt.strip() else (None, f"empty response ({resp.stop_reason})")
-
-
-def ai_narrative_cli(summary_json, afd_text, fa_synopsis, images):
-    """Local path: the Claude Code CLI reads the images from disk."""
-    exe = shutil.which("claude") or str(Path.home() / ".local/share/mise/installs/claude/latest/claude")
-    if not Path(exe).exists():
-        return None, "claude CLI not found"
-    imgs = "\n".join(f"- {label}: {p}" for label, p in images)
-    prompt = f"{CFG['ai_instructions']}\n\nFirst use the Read tool to look at these images:\n{imgs}\n\n{ai_data(summary_json, afd_text, fa_synopsis)}"
-    try:
-        r = subprocess.run([exe, "-p", prompt, "--allowedTools", "Read", "--add-dir", str(OUT)],
-                           capture_output=True, text=True, timeout=420, cwd=str(OUT))
-        txt = r.stdout.strip()
-        if r.returncode != 0 or not txt:
-            return None, f"claude exited {r.returncode}: {r.stderr.strip()[:200]}"
-        return clean_html(txt), "ok"
-    except Exception as e:  # noqa: BLE001
-        return None, f"{type(e).__name__}: {e}"
-
-
-def ai_narrative(*a):
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return ai_narrative_api(*a)
-    return ai_narrative_cli(*a)
-
-
 # ---------------------------------------------------------------- main
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--region", default="alaska", choices=sorted(REGIONS), help="which region to brief (see regions.py)")
-    ap.add_argument("--no-ai", action="store_true", help="skip the Claude-written narrative")
     ap.add_argument("--open", action="store_true", help="open the briefing in the browser when done")
-    ap.add_argument("--reuse-ai", metavar="URL", help="with --no-ai: carry over the last narrative from the live page at URL")
     args = ap.parse_args()
     configure(args.region)
 
@@ -877,12 +798,6 @@ def main():
     radar_files = [f.result() for f in f_radar if f.result()]
     sat = f_sat.result()
     sfc_an, sfc_fc = f_sfc.result()
-    # Images for the narrative: radar, latest satellite per band, the surface analysis
-    # sequence (to show movement) and the forecast charts.
-    ai_images = [(f"NEXRAD radar {Path(f).stem}", f) for f in radar_files]
-    ai_images += [(f"{CFG['sat']['name']} {band} satellite, {frames[-1]['label']}", frames[-1]["path"]) for band, frames in sat.items() if frames]
-    ai_images += [(f"{CFG['sfc_analysis']['source']} surface {a['label']}", a["path"]) for a in sfc_an[-4:]]
-    ai_images += [(f"{CFG['sfc_forecast']['source']} surface {f['label']}", f["path"]) for f in sfc_fc[1:3]]
 
     # Villages with no METAR station within 8 nm get a model forecast.
     # Their hub follows the mail route when known, otherwise the nearest hub.
@@ -985,35 +900,9 @@ def main():
             if re.search(r"SYNOPSIS|ANALYSIS|SHORT TERM|AVIATION|KEY MESSAGES|DISCUSSION", k):
                 afd_ex.append({"office": CFG["afd_offices"][off], "title": k, "text": v, "time": d["time"]})
 
-    ai_html, ai_status, ai_time = None, "skipped (--no-ai)", now
-    if args.no_ai and args.reuse_ai:
-        prev = get(f"{args.reuse_ai}?nocache={int(now.timestamp())}", json_=False)
-        m = re.search(r'<!--ai-start ([^ ]+)-->(.*?)<!--ai-end-->', (prev or b"").decode(errors="replace"), re.S)
-        if m:
-            ai_html, ai_time = m.group(2), dt.datetime.fromisoformat(m.group(1))
-            ai_status = f"carried over from {local(ai_time.timestamp())} (written on manual runs)"
-    if not args.no_ai:
-        print("• writing AI synoptic/flyability narrative with Claude…", flush=True)
-        compact = {
-            "generated_utc": now.isoformat(timespec="minutes"),
-            "hubs": {i: {k: results[i][k] for k in ("name", "score", "rating", "reasons", "metar", "taf", "runway")} for i in HUBS if i in results},
-            "villages": [{k: results[i][k] for k in ("name", "hub", "route", "score", "rating", "reasons")} for i in ids if i not in HUBS],
-            "unobserved_villages": [{k: v[k] for k in ("name", "hub", "route", "score", "rating", "reasons")} for v in gap_villages],
-            "pressure": pa, "precip_reported": precip_now,
-            "airmets": [a for z in zones.values() for a in zone_airmets(z)][:40],
-            "sigmets": [p["text"][:600] for p in aawu_sig] + [str(s.get("rawSigmet") or s.get("hazard"))[:600] for s in isig],
-            "g_airmets_at_hubs": sorted({f"{g.get('hazard')} {g.get('severity') or ''} {g.get('due_to') or ''}".strip() for g in gairmets
-                                         if any(point_in_poly(stations[h]["lat"], stations[h]["lon"], g["coords"]) for h in HUBS if h in stations)}),
-            "pireps": [p["rawOb"] for p in sig_pireps][:20],
-            "alerts": [f"{a['event']}: {a['areaDesc'][:120]}" for a in alerts][:20],
-        }
-        afd_txt = "\n\n".join(f"[{a['office']} {a['title']}]\n{a['text']}" for a in afd_ex)
-        ai_html, ai_status = ai_narrative(json.dumps(compact, default=str), afd_txt, "\n".join(fa_synopsis), ai_images)
-    SOURCES["Claude narrative"] = ai_status
-    print(f"  narrative: {ai_status}", flush=True)
 
     page = render(now, results, gap_villages, zones, fa_synopsis, wa, aawu_sig, isig, gairmets, sig_pireps,
-                  alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc, ai_time, stations)
+                  alerts, afd_ex, pa, precip_now, notam_status, sat, sfc_an, sfc_fc, stations)
     path = OUT / "briefing.html"
     path.write_text(page)
     stamp = now.astimezone(TZ).strftime("%Y-%m-%d")
@@ -1063,7 +952,7 @@ def loop_player(frames, title, note="", lazy=True, start_last=True):
     </div>"""
 
 
-def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc, ai_time, stations):
+def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, alerts, afd_ex, pa, precip_now, notam_status, sat, sfc_an, sfc_fc, stations):
     ts = now.astimezone(TZ).strftime("%A %B %-d, %Y · %H:%M %Z")
     hub_cards, hub_details = [], []
     for icao, h in HUBS.items():
@@ -1203,7 +1092,6 @@ pre{{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);bord
 .tag{{display:inline-block;font-size:.66rem;font-weight:600;padding:0 6px;border-radius:4px;margin-left:4px;vertical-align:1px}}.tag.mail{{background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--accent)}}.tag.near{{border:1px solid var(--line);color:var(--muted)}}
 .rw-ok{{color:var(--good)}}.rw-warn{{color:var(--marg)}}.rw-bad,.rw-reported{{color:var(--nogo)}}
 .card{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}}
-.ai h3{{margin:14px 0 6px;font-size:1.05rem}}.ai h3:first-child{{margin-top:0}}
 .imgs{{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}}.imgs2{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}
 .loop{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}}.loop-stage{{position:relative;background:#000;border-radius:6px;overflow:hidden;min-height:200px}}.loop-stage img{{width:100%;display:block}}
 .loop-time{{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.7);color:#fff;font-size:.78rem;padding:2px 8px;border-radius:5px}}
@@ -1224,8 +1112,7 @@ pre{{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);bord
 <p class="small muted">The score starts at 100. Points come off for flight category now and forecast, wind, gusts and crosswind, freezing precipitation, thunderstorms, wind shear, icing risk, SIGMET/G-AIRMET{"" if CFG["aawu"] else "/CWA"} areas{", AAWU AIRMETs" if CFG["aawu"] else ""} and PIREPs. 75 and up is GOOD, 50–74 MARGINAL, 25–49 POOR, below 25 NO-GO. The forecast window is the next 12 hours.</p>
 
 <h2>Weather systems analysis</h2>
-{f'<p class="small muted">Written by Claude {esc(local(ai_time.timestamp()))}{" from the data at that time. Data, charts and imagery below are current" if ai_time < now - dt.timedelta(minutes=10) else ""}. A new analysis is written when the workflow is run by hand with "Write AI analysis" ticked.</p><div class="card ai"><!--ai-start {ai_time.isoformat(timespec="seconds")}-->{ai_html}<!--ai-end--></div>' if ai_html else '<p class="muted small">The Claude-written narrative wasn\'t generated. See the data below.</p>'}
-<div class="cols" style="margin-top:16px">
+<div class="cols">
   <div class="card"><h4>Surface pressure pattern (METAR)</h4>{pa_html or '<p class="muted">No data</p>'}
     {(f"<h4>AAWU synopsis</h4>" + (''.join(f'<p>{esc(s)}</p>' for s in fa_syn) or '<p class="muted">No synopsis available</p>')) if CFG["aawu"] else ""}</div>
   <div class="card"><h4>NWS forecast discussions</h4>{afd_html or '<p class="muted">No forecast discussions available</p>'}</div>

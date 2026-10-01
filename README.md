@@ -5,8 +5,8 @@
 It covers hubs PANI, PABE, PAOM, PAOT, PAUN, PAEM, PASM, PANC and PADQ, every METAR station within each hub's radius, and every Ryan Air village. Villages without a station get model guidance.
 
 ```sh
-python3 briefing.py            # full run, including the Claude-written narrative (about 1–2 min)
-python3 briefing.py --no-ai    # data and scores only (about 20 s)
+python3 briefing.py                    # Alaska (default region)
+python3 briefing.py --region denver    # Denver area
 python3 briefing.py --open     # open in the browser when done
 
 systemctl --user start ra-briefing.service   # run the scheduled job now
@@ -48,13 +48,11 @@ This is decision support only, not an official briefing.
 
 ## Hosted deployment (GitHub Actions → Cloudflare)
 
-The briefing rebuilds every 5 minutes. The Cloudflare Worker (`src/index.js`, cron in `wrangler.jsonc`) starts the GitHub Actions workflow on time; this needs a fine-grained GitHub token, with Actions read/write on this repo only, stored as the Worker secret `GH_DISPATCH_TOKEN`. The workflow's own `*/15` schedule is a fallback. Runs skip themselves if the live briefing is under 3 minutes old. Automatic refreshes make no Claude API call; they carry over the last analysis. To write a new one, run the workflow by hand with **Write AI analysis** ticked. The repo is public so Actions minutes are free.
+The briefing rebuilds every 5 minutes. The Cloudflare Worker (`src/index.js`, cron in `wrangler.jsonc`) starts the GitHub Actions workflow on time; this needs a fine-grained GitHub token, with Actions read/write on this repo only, stored as the Worker secret `GH_DISPATCH_TOKEN`. The workflow's own `*/15` schedule is a fallback. Runs skip themselves if the live briefing is under 3 minutes old. The repo is public so Actions minutes are free.
 
-In CI the narrative comes from the Claude API (`claude-opus-5`, with server-side refusal fallback) instead of the local `claude` CLI. The radar images are sent inline.
 
 | Repo secret | Required | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | for narrative | From console.anthropic.com |
 | `CLOUDFLARE_API_TOKEN` | yes | Token from the **Edit Cloudflare Workers** template |
 | `CLOUDFLARE_ACCOUNT_ID` | yes | Shown by `npx wrangler whoami` |
 | `FAA_CLIENT_ID` / `FAA_CLIENT_SECRET` | optional | NOTAMs and FICONs |
@@ -62,7 +60,7 @@ In CI the narrative comes from the Claude API (`claude-opus-5`, with server-side
 
 ## Regions
 
-`regions.py` holds the region-specific settings: hubs, satellite sector, surface charts, radars, forecast offices and the AI prompt. Choose one with `--region`.
+`regions.py` holds the region-specific settings: hubs, satellite sector, surface charts, radars and forecast offices. Choose one with `--region`.
 
 | Region | Command | Live URL | Workflow / Worker config |
 |---|---|---|---|

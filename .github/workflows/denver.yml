@@ -7,10 +7,6 @@ on:
     - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
-      ai:
-        description: "Write AI analysis (uses the paid Claude API)"
-        type: boolean
-        default: false
       force:
         description: "Rebuild even if the live briefing is fresh"
         type: boolean
@@ -30,7 +26,7 @@ jobs:
         run: |
           # Both the Cloudflare cron and GitHub's schedule can start a run;
           # build only if the live briefing is more than 3 minutes old.
-          if [ "${{ inputs.force }}" = "true" ] || [ "${{ inputs.ai }}" = "true" ]; then
+          if [ "${{ inputs.force }}" = "true" ]; then
             echo "Forced rebuild"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           gen=$(curl -s "https://denver-briefing.ra-briefing.workers.dev/?nocache=$(date +%s)" | grep -oE 'name="generated" content="[^"]+"' | cut -d'"' -f4 || true)
@@ -52,24 +48,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        if: steps.gate.outputs.run == 'true'
-        run: pip install -r requirements.txt
-
       - name: Build briefing
         if: steps.gate.outputs.run == 'true'
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FAA_CLIENT_ID: ${{ secrets.FAA_CLIENT_ID }}
           FAA_CLIENT_SECRET: ${{ secrets.FAA_CLIENT_SECRET }}
           WU_API_KEY: ${{ secrets.WU_API_KEY }}
-        run: |
-          # Automatic refreshes are free: no API call, the last analysis is carried over.
-          if [ "${{ inputs.ai }}" = "true" ]; then
-            python briefing.py --region denver
-          else
-            python briefing.py --region denver --no-ai --reuse-ai https://denver-briefing.ra-briefing.workers.dev/
-          fi
+        run: python briefing.py --region denver
 
       - name: Deploy to Cloudflare
         if: steps.gate.outputs.run == 'true'
