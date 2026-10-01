@@ -2,10 +2,11 @@ name: Morning briefing
 
 on:
   schedule:
-    # 9:00 America/Denver is 15:00 UTC in summer (MDT) and 16:00 UTC in winter (MST).
-    # Both run; the time check below lets only the 9 AM one through.
-    - cron: "0 15 * * *"
-    - cron: "0 16 * * *"
+    # GitHub often starts scheduled runs hours late, so try every hour from
+    # 9 AM Denver onward (15:17 UTC in summer, 16:17 in winter). The gate below
+    # builds on the first attempt after 9 AM and skips the rest once today's
+    # briefing is live. :17 avoids the top-of-hour scheduling backlog.
+    - cron: "17 15-23 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -17,15 +18,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Only run at 9 AM Denver time
+      - name: Build once a day, after 9 AM Denver time
         id: gate
         run: |
-          hour=$(TZ=America/Denver date +%H)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$hour" = "09" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Skipping: it is ${hour}:xx in Denver"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          hour=$(TZ=America/Denver date +%-H)
+          if [ "$hour" -lt 9 ]; then
+            echo "Skipping: it is only ${hour}:xx in Denver"
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # The briefing archives itself under the Alaska date; if today's copy
+          # is already live, an earlier run has done the job.
+          today=$(TZ=America/Anchorage date +%F)
+          code=$(curl -sL -o /dev/null -w "%{http_code}" "https://ra-briefing.ra-briefing.workers.dev/archive/briefing-${today}.html")
+          if [ "$code" = "200" ]; then
+            echo "Skipping: briefing for ${today} is already published"
             echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Building briefing for ${today}"
+            echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
       - uses: actions/checkout@v4

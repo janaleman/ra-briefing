@@ -48,7 +48,7 @@ This is decision support only, not an official briefing.
 
 ## Hosted deployment (GitHub Actions → Cloudflare)
 
-`.github/workflows/briefing.yml` runs at 9:00 America/Denver every day. It builds the briefing and deploys `out/` as static assets on the Cloudflare Worker `ra-briefing` (`wrangler.jsonc`). Put the site behind Cloudflare Access to keep it private. You can also start a run by hand from the Actions tab.
+`.github/workflows/briefing.yml` builds once a day, on the first scheduled attempt after 9:00 America/Denver. GitHub often starts scheduled runs late, so it tries hourly and skips once today's briefing is live. It builds the briefing and deploys `out/` as static assets on the Cloudflare Worker `ra-briefing` (`wrangler.jsonc`). Put the site behind Cloudflare Access to keep it private. You can also start a run by hand from the Actions tab.
 
 In CI the narrative comes from the Claude API (`claude-opus-5`, with server-side refusal fallback) instead of the local `claude` CLI. The radar images are sent inline.
 
