@@ -90,10 +90,19 @@ RADARS = [
     ("PAKC", "King Salmon NEXRAD"),
     ("PAHG", "Kenai NEXRAD"),
 ]
-SATELLITE = [
-    ("https://cdn.star.nesdis.gov/GOES18/ABI/SECTOR/ak/GEOCOLOR/1000x1000.jpg", "GOES-West GeoColor, Alaska"),
-    ("https://cdn.star.nesdis.gov/GOES18/ABI/SECTOR/ak/13/1000x1000.jpg", "GOES-West IR (Band 13), Alaska"),
+# GOES-18 (GOES-West) Alaska sector: band directory -> label.
+SAT_CDN = "https://cdn.star.nesdis.noaa.gov/GOES18/ABI/SECTOR/ak"
+SAT_BANDS = [
+    ("GEOCOLOR", "GeoColor (true color by day, IR clouds and city lights at night)"),
+    ("13", "Clean longwave IR (band 13): cloud-top temperature, day and night"),
+    ("AirMass", "Air Mass RGB: jet streaks, dry intrusions and frontal boundaries"),
 ]
+SAT_HOURS, SAT_STEP_MIN = 6, 30
+# AAWU surface analyses: the last four 6-hourly charts, ordered by issue time.
+SFC_ANALYSIS = [f"https://tgftp.nws.noaa.gov/fax/PYCA0{i}.gif" for i in range(4)]
+# OPC Arctic surface analysis plus 24-96 h forecasts (covers all of Alaska).
+SFC_FORECAST = [("https://ocean.weather.gov/shtml/arctic/Arctic_00hrsfc.gif", "Analysis")] + [
+    (f"https://ocean.weather.gov/shtml/arctic/{h}SFC_LATEST.gif", f"+{h} h forecast") for h in (24, 48, 72, 96)]
 
 CAT_ORDER = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
 SOURCES = {}  # name -> "ok" | error text
@@ -428,6 +437,81 @@ def classify_notams(items):
     return ficon, rwy, other
 
 
+def collect_satellite():
+    """Download the last SAT_HOURS of GOES-18 Alaska frames per band.
+
+    Returns band -> list of {"src", "label"} (oldest first); files land in out/img/sat/<band>/.
+    """
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=SAT_HOURS, minutes=5)
+    jobs = {}
+    for band, _ in SAT_BANDS:
+        listing = get(f"{SAT_CDN}/{band}/", json_=False, name="GOES-18 satellite (NESDIS)")
+        if not listing:
+            continue
+        names = sorted(set(re.findall(rf"(\d{{11}})_GOES18-ABI-ak-{re.escape(band)}-1000x1000\.jpg", listing.decode(errors="replace"))))
+        frames = []
+        for stamp in names:
+            t = dt.datetime.strptime(stamp, "%Y%j%H%M").replace(tzinfo=dt.timezone.utc)
+            if t >= cutoff and t.minute % SAT_STEP_MIN == 0:
+                frames.append((stamp, t))
+        if names and (not frames or frames[-1][0] != names[-1]):  # always end on the newest image
+            t = dt.datetime.strptime(names[-1], "%Y%j%H%M").replace(tzinfo=dt.timezone.utc)
+            frames.append((names[-1], t))
+        jobs[band] = frames
+
+    out = {}
+    def fetch(band, stamp, t):
+        dest = OUT / "img" / "sat" / band / f"{stamp}.jpg"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        b = get(f"{SAT_CDN}/{band}/{stamp}_GOES18-ABI-ak-{band}-1000x1000.jpg", json_=False, name="GOES-18 satellite (NESDIS)")
+        if not b:
+            return None
+        dest.write_bytes(b)
+        return {"src": f"img/sat/{band}/{stamp}.jpg", "label": local(t.timestamp()) + t.strftime(" · %H%MZ"), "path": str(dest)}
+    with cf.ThreadPoolExecutor(8) as ex:
+        for band, frames in jobs.items():
+            res = list(ex.map(lambda f: fetch(band, *f), frames))
+            out[band] = [r for r in res if r]
+    return out
+
+
+def fetch_with_time(url, dest, name):
+    """Download url to dest; return its Last-Modified time (UTC) or None on failure."""
+    from email.utils import parsedate_to_datetime
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    err = None
+    for _ in range(3):  # tgftp.nws.noaa.gov times out now and then
+        try:
+            with urllib.request.urlopen(req, timeout=45) as r:
+                body, lm = r.read(), r.headers.get("Last-Modified")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(body)
+            SOURCES.setdefault(name, "ok")
+            return parsedate_to_datetime(lm) if lm else dt.datetime.now(dt.timezone.utc)
+        except Exception as e:  # noqa: BLE001
+            err = e
+    SOURCES[name] = f"failed: {type(err).__name__}: {err}"[:200]
+    return None
+
+
+def collect_surface():
+    """AAWU 6-hourly surface analyses (last 24 h) and the OPC 0-96 h surface forecast sequence."""
+    analyses = []
+    for i, url in enumerate(SFC_ANALYSIS):
+        dest = OUT / "img" / "sfc" / f"aawu-{i}.gif"
+        t = fetch_with_time(url, dest, "AAWU surface analysis")
+        if t:
+            valid = t.replace(hour=t.hour - t.hour % 6, minute=0, second=0, microsecond=0)  # nominal synoptic time
+            analyses.append({"src": f"img/sfc/aawu-{i}.gif", "label": valid.strftime("Analysis %HZ %a %b %-d"), "path": str(dest), "t": valid})
+    analyses.sort(key=lambda a: a["t"])
+    forecast = []
+    for i, (url, label) in enumerate(SFC_FORECAST):
+        dest = OUT / "img" / "sfc" / f"opc-{i}.gif"
+        if fetch_with_time(url, dest, "OPC surface forecast"):
+            forecast.append({"src": f"img/sfc/opc-{i}.gif", "label": label, "path": str(dest)})
+    return analyses, forecast
+
+
 # ---------------------------------------------------------------- analysis
 
 def taf_window(taf, start, end):
@@ -653,7 +737,7 @@ def pressure_analysis(latest):
 AI_INSTRUCTIONS = """You are an Alaska bush-operations dispatcher meteorologist writing the morning briefing for Ryan Air (Part 135 cargo/passenger carrier, Cessna 207/208, PC-12, CASA 212, Saab 340; mostly day VFR with some IFR capability).
 
 Write the briefing sections below in plain HTML fragments (use only <h3>, <p>, <ul>, <li>, <strong>). No preamble, no markdown, no code fences.
-1. <h3>Synoptic picture</h3>: the weather systems affecting western Alaska and Kodiak/Cook Inlet today: lows and fronts, their movement, and the pressure gradient. Say what the radar images show and where.
+1. <h3>Synoptic picture</h3>: the weather systems affecting western Alaska and Kodiak/Cook Inlet today: lows and fronts, their movement, and the pressure gradient. Use the surface analyses (how lows and fronts moved over the last 24 h and where the forecast charts take them), the satellite images (cloud shields, frontal bands, dry slots, convection) and the radar images, and say where each feature is.
 2. <h3>Flyability by region</h3>: one bullet per hub (Aniak, Bethel, St. Mary's, Emmonak, Unalakleet, Nome, Kotzebue, Anchorage, Kodiak). Give the go/marginal/poor call for the morning and afternoon and the main limiting factor. Mention villages that stand out.
 3. <h3>Hazards to watch</h3>: icing, turbulence, wind/crosswind, visibility, runway surface concerns and SIGMET/AIRMET areas.
 4. <h3>Best windows</h3>: the best times to launch, and which routes to hold or re-sequence.
@@ -676,16 +760,17 @@ def clean_html(txt):
     return re.sub(r"^```(?:html)?|```$", "", txt, flags=re.M).strip()
 
 
-def ai_narrative_api(summary_json, afd_text, fa_synopsis, radar_files):
-    """Claude API path (used in CI). Radar images are sent inline."""
+def ai_narrative_api(summary_json, afd_text, fa_synopsis, images):
+    """Claude API path (used in CI). Images are sent inline."""
     import base64
     import anthropic
 
     client = anthropic.Anthropic()
     content = []
-    for f in radar_files:
-        content.append({"type": "text", "text": f"Radar image: {Path(f).stem}"})
-        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/gif",
+    for label, f in images:
+        mt = "image/jpeg" if f.endswith(".jpg") else "image/png" if f.endswith(".png") else "image/gif"
+        content.append({"type": "text", "text": label})
+        content.append({"type": "image", "source": {"type": "base64", "media_type": mt,
                                                     "data": base64.standard_b64encode(Path(f).read_bytes()).decode()}})
     content.append({"type": "text", "text": ai_data(summary_json, afd_text, fa_synopsis)})
     try:
@@ -709,13 +794,13 @@ def ai_narrative_api(summary_json, afd_text, fa_synopsis, radar_files):
     return (clean_html(txt), "ok") if txt.strip() else (None, f"empty response ({resp.stop_reason})")
 
 
-def ai_narrative_cli(summary_json, afd_text, fa_synopsis, radar_files):
-    """Local path: the Claude Code CLI reads the radar images from disk."""
+def ai_narrative_cli(summary_json, afd_text, fa_synopsis, images):
+    """Local path: the Claude Code CLI reads the images from disk."""
     exe = shutil.which("claude") or str(Path.home() / ".local/share/mise/installs/claude/latest/claude")
     if not Path(exe).exists():
         return None, "claude CLI not found"
-    imgs = "\n".join(f"- {p}" for p in radar_files)
-    prompt = f"{AI_INSTRUCTIONS}\n\nFirst use the Read tool to look at these radar images:\n{imgs}\n\n{ai_data(summary_json, afd_text, fa_synopsis)}"
+    imgs = "\n".join(f"- {label}: {p}" for label, p in images)
+    prompt = f"{AI_INSTRUCTIONS}\n\nFirst use the Read tool to look at these images:\n{imgs}\n\n{ai_data(summary_json, afd_text, fa_synopsis)}"
     try:
         r = subprocess.run([exe, "-p", prompt, "--allowedTools", "Read", "--add-dir", str(OUT)],
                            capture_output=True, text=True, timeout=420, cwd=str(OUT))
@@ -770,6 +855,8 @@ def main():
                 dest.write_bytes(b)
                 return str(dest)
         f_radar = [ex.submit(dl, f"https://radar.weather.gov/ridge/standard/{r}_0.gif", OUT / "img" / f"{r}.gif") for r, _ in RADARS]
+        f_sat = ex.submit(collect_satellite)
+        f_sfc = ex.submit(collect_surface)
 
     metars, tafs, airports = f_metar.result(), f_taf.result(), f_apt.result()
     pireps = f_pirep.result() or []
@@ -780,6 +867,14 @@ def main():
     alerts = f_alert.result()
     notams, notam_status = f_notam.result()
     radar_files = [f.result() for f in f_radar if f.result()]
+    sat = f_sat.result()
+    sfc_an, sfc_fc = f_sfc.result()
+    # Images for the narrative: radar, latest satellite per band, the surface analysis
+    # sequence (to show movement) and the forecast charts.
+    ai_images = [(f"NEXRAD radar {Path(f).stem}", f) for f in radar_files]
+    ai_images += [(f"GOES-18 {band} satellite, {frames[-1]['label']}", frames[-1]["path"]) for band, frames in sat.items() if frames]
+    ai_images += [(f"AAWU surface {a['label']}", a["path"]) for a in sfc_an]
+    ai_images += [(f"OPC Arctic surface {f['label']}", f["path"]) for f in sfc_fc[1:3]]
 
     # Villages with no METAR station within 8 nm get a model forecast.
     gap_villages = []
@@ -883,12 +978,12 @@ def main():
             "alerts": [f"{a['event']}: {a['areaDesc'][:120]}" for a in alerts][:20],
         }
         afd_txt = "\n\n".join(f"[{a['office']} {a['title']}]\n{a['text']}" for a in afd_ex)
-        ai_html, ai_status = ai_narrative(json.dumps(compact, default=str), afd_txt, "\n".join(fa_synopsis), radar_files)
+        ai_html, ai_status = ai_narrative(json.dumps(compact, default=str), afd_txt, "\n".join(fa_synopsis), ai_images)
     SOURCES["Claude narrative"] = ai_status
     print(f"  narrative: {ai_status}", flush=True)
 
     page = render(now, results, gap_villages, zones, fa_synopsis, wa, aawu_sig, isig, gairmets, sig_pireps,
-                  alerts, afd_ex, pa, precip_now, ai_html, notam_status)
+                  alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc)
     path = OUT / "briefing.html"
     path.write_text(page)
     stamp = now.astimezone(AK_TZ).strftime("%Y-%m-%d")
@@ -914,7 +1009,25 @@ def fmt_cig(c):
     return "—" if c is None else f"{int(c):,}"
 
 
-def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, alerts, afd_ex, pa, precip_now, ai_html, notam_status):
+def loop_player(frames, title, note="", lazy=True, start_last=True):
+    """Animated frame player. Frames load on first view (or tab open) to keep the page light."""
+    if not frames:
+        return f'<div class="loop empty"><p class="muted small">{esc(title)}: no images available this run.</p></div>'
+    data = esc(json.dumps([{"src": f["src"], "label": f["label"]} for f in frames]))
+    first = frames[-1 if start_last else 0]
+    return f"""<div class="loop" data-frames="{data}" data-lazy="{'1' if lazy else '0'}">
+      <div class="loop-stage"><img alt="{esc(title)}" src="{'' if lazy else esc(first['src'])}" data-first="{esc(first['src'])}"><span class="loop-time mono">{esc(first['label'])}</span></div>
+      <div class="loop-ctrl">
+        <button type="button" class="lp-play" aria-label="Play">▶</button>
+        <input type="range" class="lp-pos" min="0" max="{len(frames) - 1}" value="{len(frames) - 1 if start_last else 0}" aria-label="Frame">
+        <select class="lp-speed" aria-label="Speed"><option value="900">Slow</option><option value="450" selected>Normal</option><option value="200">Fast</option></select>
+        <a class="small" href="{esc(first['src'])}" target="_blank">Full size ↗</a>
+      </div>
+      {f'<p class="small muted">{esc(note)}</p>' if note else ''}
+    </div>"""
+
+
+def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc):
     ts = now.astimezone(AK_TZ).strftime("%A %B %-d, %Y · %H:%M %Z")
     hub_cards, hub_details = [], []
     for icao, h in HUBS.items():
@@ -992,7 +1105,13 @@ def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, al
         </section>""")
 
     radar_html = "".join(f"""<figure><img src="https://radar.weather.gov/ridge/standard/{r}_loop.gif" loading="lazy" alt="{esc(t)} radar loop" onerror="this.src='img/{r}.gif'"><figcaption>{esc(t)} <a href="https://radar.weather.gov/station/{r.lower()}/standard" target="_blank">↗</a></figcaption></figure>""" for r, t in RADARS)
-    sat_html = "".join(f"""<figure><img src="{u}" loading="lazy" alt="{esc(t)}" onerror="this.closest('figure').remove()"><figcaption>{esc(t)}</figcaption></figure>""" for u, t in SATELLITE)
+    sat_tabs = "".join(f'<button type="button" role="tab" data-tab="sat-{esc(b)}" aria-selected="{"true" if i == 0 else "false"}">{esc(lbl.split(" (")[0].split(":")[0])}</button>' for i, (b, lbl) in enumerate(SAT_BANDS))
+    sat_panes = "".join(f'<div class="tabpane" id="sat-{esc(b)}" {"" if i == 0 else "hidden"}>{loop_player(sat.get(b, []), lbl, f"{lbl}. GOES-18 Alaska sector, last {SAT_HOURS} h every {SAT_STEP_MIN} min.")}</div>' for i, (b, lbl) in enumerate(SAT_BANDS))
+    sat_html = f'<div class="satwrap"><div class="tabs" role="tablist">{sat_tabs}</div>{sat_panes}</div>'
+    sfc_html = f"""<div class="imgs2">
+      <div><h4>Surface analysis, last 24 h (AAWU)</h4>{loop_player(sfc_an, "AAWU surface analysis", "6-hourly analyses from the Alaska Aviation Weather Unit. Watch how the lows and fronts have moved.", start_last=False)}</div>
+      <div><h4>Surface forecast, 0–96 h (OPC)</h4>{loop_player(sfc_fc, "OPC surface forecast", "Ocean Prediction Center Arctic analysis and 24/48/72/96 h forecasts.", start_last=False)}</div>
+    </div>"""
     pa_html = ""
     if pa:
         def nm_(i):
@@ -1033,13 +1152,17 @@ pre{{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);bord
 .rw-ok{{color:var(--good)}}.rw-warn{{color:var(--marg)}}.rw-bad,.rw-reported{{color:var(--nogo)}}
 .card{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}}
 .ai h3{{margin:14px 0 6px;font-size:1.05rem}}.ai h3:first-child{{margin-top:0}}
-.imgs{{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}}figure{{margin:0;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}}figure img{{width:100%;display:block}}figcaption{{padding:6px 10px;font-size:.82rem}}
+.imgs{{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}}.imgs2{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}
+.loop{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}}.loop-stage{{position:relative;background:#000;border-radius:6px;overflow:hidden;min-height:200px}}.loop-stage img{{width:100%;display:block}}
+.loop-time{{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.7);color:#fff;font-size:.78rem;padding:2px 8px;border-radius:5px}}
+.loop-ctrl{{display:flex;gap:10px;align-items:center;margin-top:8px}}.loop-ctrl input[type=range]{{flex:1}}.loop-ctrl button,.loop-ctrl select,.tabs button{{font:inherit;font-size:.85rem;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:6px;padding:4px 10px;cursor:pointer}}
+.satwrap{{max-width:820px}}.tabs{{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}}.tabs button[aria-selected=true]{{background:var(--accent);border-color:var(--accent);color:#fff}}figure{{margin:0;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}}figure img{{width:100%;display:block}}figcaption{{padding:6px 10px;font-size:.82rem}}
 .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}.hubd{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px}}
 .hubd>header{{display:flex;gap:10px;align-items:center;flex-wrap:wrap}}.score-sm{{font-weight:700}}
 .tablewrap{{overflow-x:auto;margin-top:14px}}table{{width:100%;border-collapse:collapse;font-size:.85rem}}th,td{{text-align:left;padding:7px 8px;border-top:1px solid var(--line);vertical-align:top}}th{{font-size:.72rem;text-transform:uppercase;color:var(--muted);letter-spacing:.04em}}tr.gap{{background:color-mix(in srgb,var(--bg) 60%,transparent)}}
 .notam{{font-size:.76rem}}.notam.ficon{{border-color:var(--nogo)}}.notam.dim{{opacity:.7}}details summary{{cursor:pointer;font-weight:600;margin:4px 0}}
 .cols{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}.warn{{border-left:4px solid var(--marg);padding:10px 14px;background:var(--card);border-radius:8px}}
-@media (max-width:820px){{.grid2,.cols{{grid-template-columns:1fr}}}}
+@media (max-width:820px){{.grid2,.cols,.imgs2{{grid-template-columns:1fr}}}}
 </style></head><body><div class="wrap">
 <header class="top"><h1>Ryan Air · Morning Flight Briefing</h1><p class="muted">{esc(ts)} · Hubs PANI · PABE · PAOM · PAOT · PAUN · PAEM · PASM · PANC · PADQ</p>
 <p class="warn small">Decision-support summary built from automated data. It is <b>not</b> an official weather briefing. Pilots and dispatch must still get a standard briefing (1-800-WX-BRIEF), check NOTAMs and FICONs, and follow the company's operations specifications.</p></header>
@@ -1055,8 +1178,11 @@ pre{{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);bord
     <h4>AAWU synopsis</h4>{''.join(f'<p>{esc(s)}</p>' for s in fa_syn) or '<p class="muted">No synopsis available</p>'}</div>
   <div class="card"><h4>NWS forecast discussions</h4>{afd_html or '<p class="muted">No forecast discussions available</p>'}</div>
 </div>
-<h4>NEXRAD radar</h4><div class="imgs">{radar_html}</div>
-<h4>Satellite</h4><div class="imgs">{sat_html}</div>
+<h3 style="margin-top:24px">Surface analysis</h3>
+{sfc_html}
+<h3 style="margin-top:24px">Satellite (GOES-18)</h3>
+{sat_html}
+<h3 style="margin-top:24px">NEXRAD radar</h3><div class="imgs">{radar_html}</div>
 
 <h2>Hazards</h2>
 <div class="cols">
@@ -1069,7 +1195,39 @@ pre{{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);bord
 
 <h2>Data sources</h2><ul class="small">{src_html}</ul>
 <p class="small muted">Runway conditions are inferred from recent precipitation and temperature unless a FICON NOTAM is available. Villages with no METAR use Open-Meteo model guidance, plus the NWS point forecast and Weather Underground where configured. Generated by briefing.py.</p>
-</div></body></html>"""
+</div>
+<script>
+(() => {{
+  function setup(el) {{
+    if (el.dataset.ready) return;
+    el.dataset.ready = "1";
+    const frames = JSON.parse(el.dataset.frames), img = el.querySelector("img"), time = el.querySelector(".loop-time");
+    const pos = el.querySelector(".lp-pos"), play = el.querySelector(".lp-play"), speed = el.querySelector(".lp-speed"), full = el.querySelector("a");
+    frames.forEach(f => {{ const p = new Image(); p.src = f.src; }});  // preload
+    let i = +pos.value, timer = null;
+    const show = n => {{ i = (n + frames.length) % frames.length; img.src = frames[i].src; time.textContent = frames[i].label; pos.value = i; full.href = frames[i].src; }};
+    const stop = () => {{ clearInterval(timer); timer = null; play.textContent = "▶"; play.setAttribute("aria-label", "Play"); }};
+    const start = () => {{ stop(); timer = setInterval(() => show(i + 1), +speed.value); play.textContent = "❚❚"; play.setAttribute("aria-label", "Pause"); }};
+    play.onclick = () => timer ? stop() : start();
+    pos.oninput = () => {{ stop(); show(+pos.value); }};
+    speed.onchange = () => {{ if (timer) start(); }};
+    show(i);
+    start();
+  }}
+  const visible = el => !el.closest("[hidden]");
+  const io = new IntersectionObserver(es => es.forEach(e => {{ if (e.isIntersecting && visible(e.target)) {{ setup(e.target); io.unobserve(e.target); }} }}), {{ rootMargin: "200px" }});
+  document.querySelectorAll(".loop[data-frames]").forEach(el => io.observe(el));
+  document.querySelectorAll(".tabs").forEach(tabs => tabs.addEventListener("click", e => {{
+    const b = e.target.closest("button[data-tab]"); if (!b) return;
+    tabs.querySelectorAll("button").forEach(x => {{
+      const on = x === b; x.setAttribute("aria-selected", on);
+      const pane = document.getElementById(x.dataset.tab); pane.hidden = !on;
+      if (on) pane.querySelectorAll(".loop[data-frames]").forEach(setup);
+    }});
+  }}));
+}})();
+</script>
+</body></html>"""
 
 
 if __name__ == "__main__":
