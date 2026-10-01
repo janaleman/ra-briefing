@@ -108,6 +108,7 @@ DENVER = {
     "aawu": False,
     "afd_offices": {"BOU": "Denver/Boulder (BOU)", "PUB": "Pueblo (PUB)", "GJT": "Grand Junction (GJT)"},
     "cwsu": "ZDV",  # Denver Center Weather Service Unit: Center Weather Advisories
+    "pressure_max_elev_m": 2000,  # skip mountain stations (bad sea-level reductions) in the pressure analysis
     "disclaimer": "Pilots must still get a standard briefing (1-800-WX-BRIEF or 1800wxbrief.com), check NOTAMs and TFRs, and stay within their personal and operational minimums.",
     "hubs": {
         "KDEN": {"name": "Denver Intl", "radius": 20},

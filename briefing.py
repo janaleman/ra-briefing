@@ -695,8 +695,13 @@ def zone_airmets(zone_text):
 
 
 def pressure_analysis(latest):
+    # Sea-level pressure reduced from high mountain stations is unreliable, so
+    # regions with high terrain set a maximum station elevation (metres).
+    max_elev = CFG.get("pressure_max_elev_m")
     rows = []
     for icao, m in latest.items():
+        if max_elev is not None and (m.get("elev") or 0) > max_elev:
+            continue
         p = m.get("slp") or m.get("altim")
         if p:
             tend = None
@@ -1111,8 +1116,9 @@ def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, al
             return R[i]["name"] if i in R else i
         pa_html = f"""<ul>
           <li>Lowest pressure: <b>{esc(nm_(pa['low'][0]))}</b> {pa['low'][1]:.1f} hPa · highest: <b>{esc(nm_(pa['high'][0]))}</b> {pa['high'][1]:.1f} hPa. The {pa['gradient']} hPa spread across the region {'points to a tight gradient and strong winds' if pa['gradient'] >= 20 else 'is moderate' if pa['gradient'] >= 10 else 'is weak, so winds should be light'}.</li>
-          {f"<li>Fastest falling: <b>{esc(nm_(pa['fall'][0]))}</b> {pa['fall'][2]:+.1f} hPa/3h{', a system approaching' if pa['fall'][2] <= -2 else ''}.</li>" if pa['fall'] else ''}
-          {f"<li>Fastest rising: <b>{esc(nm_(pa['rise'][0]))}</b> {pa['rise'][2]:+.1f} hPa/3h{', clearing or building behind a system' if pa['rise'][2] >= 2 else ''}.</li>" if pa['rise'] else ''}
+          {f"<li>Fastest falling: <b>{esc(nm_(pa['fall'][0]))}</b> {pa['fall'][2]:+.1f} hPa/3h{', a system approaching' if pa['fall'][2] <= -2 else ''}.</li>" if pa['fall'] and pa['fall'][2] < 0 else ''}
+          {f"<li>Fastest rising: <b>{esc(nm_(pa['rise'][0]))}</b> {pa['rise'][2]:+.1f} hPa/3h{', clearing or building behind a system' if pa['rise'][2] >= 2 else ''}.</li>" if pa['rise'] and pa['rise'][2] > 0 else ''}
+          {"<li>Pressure is rising or steady everywhere; no station reports a 3-hour fall.</li>" if pa['fall'] and pa['fall'][2] >= 0 else ''}
           <li>Stations reporting precipitation: {esc(', '.join(precip_now) or 'none')}</li>
         </ul>"""
     afd_html = "".join(f"<details {'open' if i < 2 else ''}><summary>{esc(a['office'])}: {esc(a['title'])} <span class='muted small'>{esc(local(a['time']))}</span></summary><pre>{esc(a['text'])}</pre></details>" for i, a in enumerate(afd_ex))
