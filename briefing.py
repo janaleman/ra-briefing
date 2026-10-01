@@ -199,6 +199,8 @@ def collect_stations():
             hub, route = mail_hub, "mail"
         else:
             near = [(h, nm(pos, p)) for h, p in hub_pos.items() if nm(pos, p) <= HUBS[h]["radius"]]
+            if not near and icao in CFG.get("include_stations", []):
+                near = [(h, nm(pos, p)) for h, p in hub_pos.items()]  # required station: nearest hub at any range
             if not near:
                 continue
             hub, route = min(near, key=lambda x: x[1])[0], "nearby"

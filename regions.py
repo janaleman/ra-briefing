@@ -147,7 +147,9 @@ DENVER = {
     "tz": "America/Denver",
     "out": "out-denver",
     "nearby_label": "Nearby airports",
-    "station_bbox": "38.0,-107.6,41.2,-103.4",
+    "station_bbox": "38.0,-107.6,41.2,-102.9",
+    # Always brief these, even beyond every hub's radius (grouped under the nearest hub).
+    "include_stations": ["KBJC", "KAPA", "KLIC", "KFMM", "KAKO", "KCFO", "KEIK", "KLMO", "KGXY", "KFLY"],
     "pirep_bbox": "37,-109.5,41.5,-102",
     "alerts_area": "CO",
     "alerts_label": "Colorado",
