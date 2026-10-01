@@ -70,3 +70,7 @@ In CI the narrative comes from the Claude API (`claude-opus-5`, with server-side
 | Denver area | `python3 briefing.py --region denver` | https://denver-briefing.ra-briefing.workers.dev | `denver.yml` / `wrangler.denver.jsonc` |
 
 Each region has its own GitHub workflow and Cloudflare Worker. Each Worker needs its own `GH_DISPATCH_TOKEN` secret for on-time 5-minute refreshes; one token with Actions read/write on this repo covers both. Denver uses GOES-19 (Southern Rockies sector), WPC surface analyses and forecasts, domestic SIGMETs, ZDV Center Weather Advisories, G-AIRMETs and the BOU/PUB/GJT forecast discussions.
+
+### Alaska mail routing
+
+Alaska villages and stations are grouped the way Bypass Mail is routed: hub to bush point, as listed in USPS Handbook PO-508, Appendix A, Attachment D (March 2012 edition). They're matched by airport/mail stop code (`mail_routes` in `regions.py`). Savoonga is its own mail hub (it serves Gambell). Stations that route through mail hubs outside the briefing (Galena, McGrath, Dillingham and others) are left out. Anything not on a route (Kodiak villages, Diomede, non-village stations) is grouped under the nearest hub and tagged "nearby".

@@ -25,13 +25,59 @@ ALASKA = {
         "PAOM": {"name": "Nome", "radius": 150, "fa": ["SEWARD PEN", "ST LAWRENCE"]},
         "PAOT": {"name": "Kotzebue", "radius": 150, "fa": ["KOBUK", "NOATAK", "KOTZEBUE"]},
         "PADQ": {"name": "Kodiak", "radius": 80, "fa": ["KODIAK"]},
+        "PASA": {"name": "Savoonga (St. Lawrence Is.)", "radius": 40, "fa": ["ST LAWRENCE"]},
+    },
+    # How Bypass Mail is routed: hub -> bush points by airport code, from USPS
+    # Handbook PO-508, Appendix A, Attachment D (March 2012 edition). Stations and
+    # villages on these routes are grouped under their mail hub; anything else
+    # (e.g. Kodiak villages, Diomede, non-village stations) falls back to the
+    # nearest hub within its radius and is labelled "nearby".
+    "mail_routes": {
+        "PANI": ["ANV", "CHU", "CKD", "KGX", "HCR", "KLG", "RDV", "RSH", "SHX", "SLQ", "SRV"],
+        "PABE": ["KKI", "AKI", "ATT", "CYF", "VAK", "EEK", "GNU", "HPB", "KUK", "KPN", "KKH", "KWT", "KWK",
+                 "MLL", "MYU", "WNA", "PKA", "WWT", "NME", "NUP", "PTU", "KWN", "SCM", "OOK", "TLT", "WTL", "TNK"],
+        "PAEM": ["AUK", "KOT", "SXP"],
+        "PASM": ["MOU", "PQS"],
+        "PAUN": ["KKA", "SMK", "SKK", "WBB"],
+        "PAOM": ["KTS", "ELI", "GLV", "SHH", "TLA", "TNC", "WAA", "WMO"],
+        "PASA": ["GAM"],
+        "PAOT": ["ABL", "BKC", "DRG", "IAN", "KVL", "OBU", "WTK", "ORV", "PHO", "WLK", "SHG"],
+    },
+    # Bush points that PO-508 routes through mail hubs outside this briefing
+    # (Galena, McGrath, Dillingham, King Salmon, Iliamna, Cold Bay, Port Heiden);
+    # their stations are left out rather than grouped under the wrong hub.
+    "other_mail_codes": ["GAL", "HUS", "HSL", "KAL", "KYU", "NUL", "RBY", "MCG", "NIB", "TCT", "TLJ",
+                         "DLG", "WKK", "CLP", "KEK", "KGK", "KMO", "KNW", "TOG", "TWA", "AKN", "EGX",
+                         "KLL", "PIP", "WSN", "ILI", "KNK", "NNL", "PDB", "PTA", "CDB", "KFP", "KVC",
+                         "NLG", "PML", "PTH", "KCG", "KCL", "KCQ", "KPV"],
+    # Stations whose IATA/FAA IDs in the feed don't carry the mail stop code.
+    "station_mail_codes": {"PFKO": "KOT", "PFZK": "KKI", "POKA": "TNK", "PPIT": "NUP"},
+    # Mail stop code for each village in "villages" (used when a village has no METAR).
+    "village_mail_codes": {
+        "Anvik": "ANV", "Chuathbaluk": "CHU", "Crooked Creek": "CKD", "Grayling": "KGX", "Holy Cross": "HCR",
+        "Kalskag": "KLG", "Lower Kalskag": "KLG", "Red Devil": "RDV", "Russian Mission": "RSH", "Shageluk": "SHX",
+        "Sleetmute": "SLQ", "Stony River": "SRV",
+        "Akiachak": "KKI", "Akiak": "AKI", "Atmautluak": "ATT", "Chefornak": "CYF", "Chevak": "VAK", "Eek": "EEK",
+        "Goodnews Bay": "GNU", "Hooper Bay": "HPB", "Kasigluk": "KUK", "Kipnuk": "KPN", "Kongiganak": "KKH",
+        "Kwethluk": "KWT", "Kwigillingok": "KWK", "Marshall": "MLL", "Mekoryuk": "MYU", "Napakiak": "WNA",
+        "Napaskiak": "PKA", "Newtok": "WWT", "Nightmute": "NME", "Nunapitchuk": "NUP", "Platinum": "PTU",
+        "Quinhagak": "KWN", "Scammon Bay": "SCM", "Toksook Bay": "OOK", "Tuluksak": "TLT", "Tuntutuliak": "WTL",
+        "Tununak": "TNK",
+        "Alakanuk": "AUK", "Kotlik": "KOT", "Nunam Iqua": "SXP",
+        "Mountain Village": "MOU", "Pilot Station": "PQS", "Pitkas Point": "PQS",
+        "Koyuk": "KKA", "St. Michael": "SMK", "Shaktoolik": "SKK", "Stebbins": "WBB",
+        "Brevig Mission": "KTS", "Elim": "ELI", "Golovin": "GLV", "Shishmaref": "SHH", "Teller": "TLA",
+        "Wales": "WAA", "White Mountain": "WMO", "Gambell": "GAM",
+        "Ambler": "ABL", "Buckland": "BKC", "Deering": "DRG", "Kiana": "IAN", "Kivalina": "KVL", "Kobuk": "OBU",
+        "Noatak": "WTK", "Noorvik": "ORV", "Point Hope": "PHO", "Selawik": "WLK", "Shungnak": "SHG",
     },
     # Ryan Air villages and Kodiak-area villages (approximate). Used to fill gaps
     # where no METAR station exists near a served community.
     "villages": {
         "Anvik": (62.66, -160.19), "Chuathbaluk": (61.57, -159.25), "Crooked Creek": (61.87, -158.11),
         "Grayling": (62.9, -160.07), "Holy Cross": (62.2, -159.77), "Kalskag": (61.54, -160.31),
-        "Red Devil": (61.76, -157.31), "Russian Mission": (61.79, -161.32), "Shageluk": (62.68, -159.56),
+        "Red Devil": (61.76, -157.31), "Lower Kalskag": (61.51, -160.36), "Newtok": (60.94, -164.63),
+        "Pitkas Point": (62.03, -163.29), "Russian Mission": (61.79, -161.32), "Shageluk": (62.68, -159.56),
         "Sleetmute": (61.7, -157.17), "Stony River": (61.78, -156.59),
         "Akiachak": (60.91, -161.43), "Akiak": (60.91, -161.21), "Atmautluak": (60.87, -162.27),
         "Chefornak": (60.16, -164.27), "Chevak": (61.53, -165.59), "Eek": (60.22, -162.02),
@@ -88,7 +134,7 @@ ALASKA = {
 
 Write the briefing sections below in plain HTML fragments (use only <h3>, <p>, <ul>, <li>, <strong>). No preamble, no markdown, no code fences.
 1. <h3>Synoptic picture</h3>: the weather systems affecting western Alaska and Kodiak/Cook Inlet today: lows and fronts, their movement, and the pressure gradient. Use the surface analyses (how lows and fronts moved over the last 24 h and where the forecast charts take them), the satellite images (cloud shields, frontal bands, dry slots, convection) and the radar images, and say where each feature is.
-2. <h3>Flyability by region</h3>: one bullet per hub (Aniak, Bethel, St. Mary's, Emmonak, Unalakleet, Nome, Kotzebue, Anchorage, Kodiak). Give the go/marginal/poor call for the morning and afternoon and the main limiting factor. Mention villages that stand out.
+2. <h3>Flyability by region</h3>: one bullet per hub (Aniak, Bethel, St. Mary's, Emmonak, Unalakleet, Nome, Savoonga, Kotzebue, Anchorage, Kodiak). Villages are grouped by how mail is routed (USPS Bypass Mail hub), so judge each hub together with the villages it feeds. Give the go/marginal/poor call for the morning and afternoon and the main limiting factor. Mention villages that stand out.
 3. <h3>Hazards to watch</h3>: icing, turbulence, wind/crosswind, visibility, runway surface concerns and SIGMET/AIRMET areas.
 4. <h3>Best windows</h3>: the best times to launch, and which routes to hold or re-sequence.
 Be concrete and brief (under 450 words). Base everything only on the data given. If data is missing, say so; don't invent it.""",

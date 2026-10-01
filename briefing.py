@@ -170,30 +170,46 @@ def chunks(seq, n):
 
 # ---------------------------------------------------------------- collection
 
+def mail_hub_by_code():
+    """Mail stop code -> hub ICAO, from the region's mail routes (empty if none)."""
+    return {code: hub for hub, codes in CFG.get("mail_routes", {}).items() for code in codes}
+
+
 def collect_stations():
-    """All METAR-reporting stations within each hub's radius."""
+    """METAR stations grouped under hubs.
+
+    A station on a mail route goes under its mail hub ("mail"); any other station
+    goes under the nearest hub within that hub's radius ("nearby").
+    """
     info = awc("stationinfo", bbox=CFG["station_bbox"]) or []
+    hub_pos = {x["icaoId"]: (x["lat"], x["lon"]) for x in info if x["icaoId"] in HUBS}
+    by_code, overrides = mail_hub_by_code(), CFG.get("station_mail_codes", {})
     stations = {}
     for s in info:
         if "METAR" not in (s.get("siteType") or []):
             continue
-        pos = (s["lat"], s["lon"])
-        best = None
-        for icao, h in HUBS.items():
-            hub = next((x for x in info if x["icaoId"] == icao), None)
-            if not hub:
+        icao, pos = s["icaoId"], (s["lat"], s["lon"])
+        codes = {s.get("iataId"), s.get("faaId"), overrides.get(icao)} - {None}
+        mail_hub = next((by_code[c] for c in codes if c in by_code), None)
+        if icao not in HUBS and codes & set(CFG.get("other_mail_codes", [])):
+            continue  # mail goes through a hub outside this briefing
+        if icao in HUBS:
+            hub, route = icao, "hub"
+        elif mail_hub and mail_hub in hub_pos:
+            hub, route = mail_hub, "mail"
+        else:
+            near = [(h, nm(pos, p)) for h, p in hub_pos.items() if nm(pos, p) <= HUBS[h]["radius"]]
+            if not near:
                 continue
-            d = nm(pos, (hub["lat"], hub["lon"]))
-            if d <= h["radius"] and (best is None or d < best[1]):
-                best = (icao, d)
-        if best or s["icaoId"] in HUBS:
-            stations[s["icaoId"]] = {
-                "id": s["icaoId"], "name": (s.get("site") or s["icaoId"]).replace(" Arpt", ""),
-                "lat": s["lat"], "lon": s["lon"], "elev": s.get("elev"),
-                "hub": s["icaoId"] if s["icaoId"] in HUBS else best[0],
-                "dist": 0 if s["icaoId"] in HUBS else round(best[1]),
-                "has_taf": "TAF" in (s.get("siteType") or []),
-            }
+            hub, route = min(near, key=lambda x: x[1])[0], "nearby"
+        stations[icao] = {
+            "id": icao, "name": (s.get("site") or icao).replace(" Arpt", ""),
+            "lat": s["lat"], "lon": s["lon"], "elev": s.get("elev"),
+            "hub": hub, "route": route,
+            "dist": 0 if route == "hub" else round(nm(pos, hub_pos[hub])),
+            "has_taf": "TAF" in (s.get("siteType") or []),
+            "codes": sorted(codes),
+        }
     return stations
 
 
@@ -867,11 +883,25 @@ def main():
     ai_images += [(f"{CFG['sfc_forecast']['source']} surface {f['label']}", f["path"]) for f in sfc_fc[1:3]]
 
     # Villages with no METAR station within 8 nm get a model forecast.
-    gap_villages = []
+    # Their hub follows the mail route when known, otherwise the nearest hub.
+    # A village counts as observed only by a station at its own airport (same mail
+    # stop code, within 8 nm); villages without a code need a station within 3 nm.
+    gap_villages, by_code = [], mail_hub_by_code()
+    vcodes = CFG.get("village_mail_codes", {})
+    def observed(v, pos):
+        code = vcodes.get(v)
+        if code:
+            return any(code in st.get("codes", []) and nm(pos, (st["lat"], st["lon"])) <= 8 for st in stations.values())
+        return any(nm(pos, (st["lat"], st["lon"])) <= 3 for st in stations.values())
     for v, pos in VILLAGES.items():
-        if not any(nm(pos, (s["lat"], s["lon"])) <= 8 for s in stations.values()):
-            hub = min(HUBS, key=lambda h: nm(pos, (stations[h]["lat"], stations[h]["lon"])) if h in stations else 1e9)
-            gap_villages.append({"name": v, "lat": pos[0], "lon": pos[1], "hub": hub,
+        if not observed(v, pos):
+            mail_hub = by_code.get(CFG.get("village_mail_codes", {}).get(v))
+            if mail_hub in stations:
+                hub, route = mail_hub, "mail"
+            else:
+                hub = min(HUBS, key=lambda h: nm(pos, (stations[h]["lat"], stations[h]["lon"])) if h in stations else 1e9)
+                route = "nearby"
+            gap_villages.append({"name": v, "lat": pos[0], "lon": pos[1], "hub": hub, "route": route,
                                  "dist": round(nm(pos, (stations[hub]["lat"], stations[hub]["lon"]))) if hub in stations else None})
 
     print(f"• model forecast for {len(ids)} stations + {len(gap_villages)} unobserved villages…", flush=True)
@@ -965,8 +995,8 @@ def main():
         compact = {
             "generated_utc": now.isoformat(timespec="minutes"),
             "hubs": {i: {k: results[i][k] for k in ("name", "score", "rating", "reasons", "metar", "taf", "runway")} for i in HUBS if i in results},
-            "villages": [{k: results[i][k] for k in ("name", "hub", "score", "rating", "reasons")} for i in ids if i not in HUBS],
-            "unobserved_villages": [{k: v[k] for k in ("name", "hub", "score", "rating", "reasons")} for v in gap_villages],
+            "villages": [{k: results[i][k] for k in ("name", "hub", "route", "score", "rating", "reasons")} for i in ids if i not in HUBS],
+            "unobserved_villages": [{k: v[k] for k in ("name", "hub", "route", "score", "rating", "reasons")} for v in gap_villages],
             "pressure": pa, "precip_reported": precip_now,
             "airmets": [a for z in zones.values() for a in zone_airmets(z)][:40],
             "sigmets": [p["text"][:600] for p in aawu_sig] + [str(s.get("rawSigmet") or s.get("hazard"))[:600] for s in isig],
@@ -1001,6 +1031,12 @@ def badge(rating):
 
 def catpill(c):
     return f'<span class="cat {esc((c or "na").lower())}">{esc(c or "—")}</span>'
+
+
+def route_tag(route):
+    if not CFG.get("mail_routes") or route == "hub":
+        return ""
+    return ' <span class="tag mail">mail route</span>' if route == "mail" else ' <span class="tag near">nearby</span>'
 
 
 def fmt_cig(c):
@@ -1049,9 +1085,9 @@ def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, al
         </a>""")
 
         rows = []
-        for x in sorted(vill, key=lambda x: x["dist"]):
+        for x in sorted(vill, key=lambda x: (x["route"] != "mail", x["dist"])):
             rows.append(f"""<tr>
-              <td><b>{esc(x['name'])}</b><br><span class="mono muted">{x['id']} · {x['dist']} nm</span></td>
+              <td><b>{esc(x['name'])}</b><br><span class="mono muted">{x['id']} · {x['dist']} nm</span>{route_tag(x['route'])}</td>
               <td>{catpill(x['now_cat'])}</td><td>{catpill(x['fc_cat'])}</td>
               <td class="mono">{fmt_cig(x['cig'])}</td><td class="mono">{'' if x['vis'] is None else f"{x['vis']:g}"}</td>
               <td class="mono">{x['wind'] or 0}{f"G{x['gust']}" if x['gust'] else ''}{f" / X{x['xw']}" if x['xw'] is not None else ''}</td>
@@ -1062,7 +1098,7 @@ def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, al
             m = g.get("model") or {}
             extra = " · ".join(filter(None, [g.get("nws"), g.get("wu")]))
             rows.append(f"""<tr class="gap">
-              <td><b>{esc(g['name'])}</b><br><span class="mono muted">no METAR · model</span></td>
+              <td><b>{esc(g['name'])}</b><br><span class="mono muted">no METAR · model</span>{route_tag(g['route'])}</td>
               <td>—</td><td>{catpill(g['fc_cat'])}</td><td class="mono">{m.get('low_cloud_hours', '—')}h low cld</td>
               <td class="mono">{m.get('min_vis_sm', '—')}</td><td class="mono">{m.get('max_wind', 0)}G{m.get('max_gust', 0)}</td>
               <td class="small muted">past 6h precip {m.get('past_precip_mm', '—')} mm</td>
@@ -1162,6 +1198,7 @@ pre{{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);bord
 .cat{{display:inline-block;font:700 .72rem ui-monospace,monospace;padding:1px 6px;border-radius:5px;border:1.5px solid var(--muted);color:var(--muted)}}
 .cat.vfr{{border-color:var(--vfr);color:var(--vfr)}}.cat.mvfr{{border-color:var(--mvfr);color:var(--mvfr)}}.cat.ifr{{border-color:var(--ifr);color:var(--ifr)}}.cat.lifr{{border-color:var(--lifr);color:var(--lifr)}}
 .dot{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px}}.dot.good{{background:var(--good)}}.dot.marg{{background:var(--marg)}}.dot.poor{{background:var(--poor)}}.dot.nogo{{background:var(--nogo)}}
+.tag{{display:inline-block;font-size:.66rem;font-weight:600;padding:0 6px;border-radius:4px;margin-left:4px;vertical-align:1px}}.tag.mail{{background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--accent)}}.tag.near{{border:1px solid var(--line);color:var(--muted)}}
 .rw-ok{{color:var(--good)}}.rw-warn{{color:var(--marg)}}.rw-bad,.rw-reported{{color:var(--nogo)}}
 .card{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}}
 .ai h3{{margin:14px 0 6px;font-size:1.05rem}}.ai h3:first-child{{margin-top:0}}
