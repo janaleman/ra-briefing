@@ -1,4 +1,4 @@
-// Serves the briefing (static assets in out/) and, every 30 minutes, asks
+// Serves the briefing (static assets in out/) and, every 5 minutes, asks
 // GitHub Actions to rebuild it. Cloudflare cron fires on time; GitHub's own
 // scheduler often runs hours late.
 const DISPATCH_URL =

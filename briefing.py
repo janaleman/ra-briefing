@@ -824,6 +824,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-ai", action="store_true", help="skip the Claude-written narrative")
     ap.add_argument("--open", action="store_true", help="open the briefing in the browser when done")
+    ap.add_argument("--reuse-ai", metavar="URL", help="with --no-ai: carry over the last narrative from the live page at URL")
     args = ap.parse_args()
 
     OUT.mkdir(exist_ok=True)
@@ -963,7 +964,13 @@ def main():
             if re.search(r"SYNOPSIS|ANALYSIS|SHORT TERM|AVIATION|KEY MESSAGES|DISCUSSION", k):
                 afd_ex.append({"office": "Anchorage (AFC)" if off == "AFC" else "Fairbanks (AFG)", "title": k, "text": v, "time": d["time"]})
 
-    ai_html, ai_status = None, "skipped (--no-ai)"
+    ai_html, ai_status, ai_time = None, "skipped (--no-ai)", now
+    if args.no_ai and args.reuse_ai:
+        prev = get(f"{args.reuse_ai}?nocache={int(now.timestamp())}", json_=False)
+        m = re.search(r'<!--ai-start ([^ ]+)-->(.*?)<!--ai-end-->', (prev or b"").decode(errors="replace"), re.S)
+        if m:
+            ai_html, ai_time = m.group(2), dt.datetime.fromisoformat(m.group(1))
+            ai_status = f"carried over from {local(ai_time.timestamp())} (written on manual runs)"
     if not args.no_ai:
         print("• writing AI synoptic/flyability narrative with Claude…", flush=True)
         compact = {
@@ -983,7 +990,7 @@ def main():
     print(f"  narrative: {ai_status}", flush=True)
 
     page = render(now, results, gap_villages, zones, fa_synopsis, wa, aawu_sig, isig, gairmets, sig_pireps,
-                  alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc)
+                  alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc, ai_time)
     path = OUT / "briefing.html"
     path.write_text(page)
     stamp = now.astimezone(AK_TZ).strftime("%Y-%m-%d")
@@ -1027,7 +1034,7 @@ def loop_player(frames, title, note="", lazy=True, start_last=True):
     </div>"""
 
 
-def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc):
+def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc, ai_time):
     ts = now.astimezone(AK_TZ).strftime("%A %B %-d, %Y · %H:%M %Z")
     hub_cards, hub_details = [], []
     for icao, h in HUBS.items():
@@ -1134,7 +1141,7 @@ def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, al
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ryan Air Morning Briefing</title>
 <meta name="generated" content="{now.isoformat(timespec='seconds')}">
-<meta http-equiv="refresh" content="1800">
+<meta http-equiv="refresh" content="300">
 <style>
 :root{{--bg:#f5f6f8;--card:#fff;--ink:#101828;--muted:#667085;--line:#e4e7ec;--good:#12805c;--marg:#b98900;--poor:#d0541b;--nogo:#c01d2e;--vfr:#12805c;--mvfr:#1d5fd1;--ifr:#c01d2e;--lifr:#a21caf;--accent:#d9731c}}
 @media (prefers-color-scheme:dark){{:root:not([data-theme=light]){{--bg:#0b1118;--card:#121a24;--ink:#e6edf3;--muted:#8b98a8;--line:#223040;--good:#3fbf8a;--marg:#e0b53a;--poor:#f07d43;--nogo:#f0556a;--vfr:#3fbf8a;--mvfr:#5b9bff;--ifr:#f0556a;--lifr:#d77cf0}}}}
@@ -1174,7 +1181,7 @@ pre{{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);bord
 <p class="small muted">The score starts at 100. Points come off for flight category now and forecast, wind, gusts and crosswind, freezing precipitation, thunderstorms, wind shear, icing risk, SIGMET/G-AIRMET areas, AAWU AIRMETs and PIREPs. 75 and up is GOOD, 50–74 MARGINAL, 25–49 POOR, below 25 NO-GO. The forecast window is the next 12 hours.</p>
 
 <h2>Weather systems analysis</h2>
-{f'<div class="card ai">{ai_html}</div>' if ai_html else '<p class="muted small">The Claude-written narrative wasn\'t generated. See the data below.</p>'}
+{f'<p class="small muted">Written by Claude {esc(local(ai_time.timestamp()))}{" from the data at that time. Data, charts and imagery below are current" if ai_time < now - dt.timedelta(minutes=10) else ""}. A new analysis is written when the workflow is run by hand with "Write AI analysis" ticked.</p><div class="card ai"><!--ai-start {ai_time.isoformat(timespec="seconds")}-->{ai_html}<!--ai-end--></div>' if ai_html else '<p class="muted small">The Claude-written narrative wasn\'t generated. See the data below.</p>'}
 <div class="cols" style="margin-top:16px">
   <div class="card"><h4>Surface pressure pattern (METAR)</h4>{pa_html or '<p class="muted">No data</p>'}
     <h4>AAWU synopsis</h4>{''.join(f'<p>{esc(s)}</p>' for s in fa_syn) or '<p class="muted">No synopsis available</p>'}</div>

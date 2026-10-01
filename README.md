@@ -48,7 +48,7 @@ This is decision support only, not an official briefing.
 
 ## Hosted deployment (GitHub Actions → Cloudflare)
 
-The briefing rebuilds every 30 minutes. The Cloudflare Worker (`src/index.js`, cron in `wrangler.jsonc`) starts the GitHub Actions workflow on time; this needs a fine-grained GitHub token, with Actions read/write on this repo only, stored as the Worker secret `GH_DISPATCH_TOKEN`. The workflow's own `*/30` schedule is a fallback. Runs skip themselves if the live briefing is under 20 minutes old. Each run deploys `out/` as the Worker's static assets. You can also start a run by hand from the Actions tab.
+The briefing rebuilds every 5 minutes. The Cloudflare Worker (`src/index.js`, cron in `wrangler.jsonc`) starts the GitHub Actions workflow on time; this needs a fine-grained GitHub token, with Actions read/write on this repo only, stored as the Worker secret `GH_DISPATCH_TOKEN`. The workflow's own `*/15` schedule is a fallback. Runs skip themselves if the live briefing is under 3 minutes old. Automatic refreshes make no Claude API call; they carry over the last analysis. To write a new one, run the workflow by hand with **Write AI analysis** ticked. The repo is public so Actions minutes are free.
 
 In CI the narrative comes from the Claude API (`claude-opus-5`, with server-side refusal fallback) instead of the local `claude` CLI. The radar images are sent inline.
 
