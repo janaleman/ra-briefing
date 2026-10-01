@@ -59,3 +59,14 @@ In CI the narrative comes from the Claude API (`claude-opus-5`, with server-side
 | `CLOUDFLARE_ACCOUNT_ID` | yes | Shown by `npx wrangler whoami` |
 | `FAA_CLIENT_ID` / `FAA_CLIENT_SECRET` | optional | NOTAMs and FICONs |
 | `WU_API_KEY` | optional | Weather Underground PWS |
+
+## Regions
+
+`regions.py` holds the region-specific settings: hubs, satellite sector, surface charts, radars, forecast offices and the AI prompt. Choose one with `--region`.
+
+| Region | Command | Live URL | Workflow / Worker config |
+|---|---|---|---|
+| Alaska (Ryan Air network) | `python3 briefing.py --region alaska` | https://ra-briefing.ra-briefing.workers.dev | `briefing.yml` / `wrangler.jsonc` |
+| Denver area | `python3 briefing.py --region denver` | https://denver-briefing.ra-briefing.workers.dev | `denver.yml` / `wrangler.denver.jsonc` |
+
+Each region has its own GitHub workflow and Cloudflare Worker. Each Worker needs its own `GH_DISPATCH_TOKEN` secret for on-time 5-minute refreshes; one token with Actions read/write on this repo covers both. Denver uses GOES-19 (Southern Rockies sector), WPC surface analyses and forecasts, domestic SIGMETs, ZDV Center Weather Advisories, G-AIRMETs and the BOU/PUB/GJT forecast discussions.

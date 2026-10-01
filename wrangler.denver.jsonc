@@ -1,0 +1,10 @@
+{
+  "name": "denver-briefing",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  // Static site: the Denver briefing page and images built into out-denver/.
+  "assets": { "directory": "./out-denver", "binding": "ASSETS" },
+  // Every 5 minutes, trigger the GitHub Actions build (needs the GH_DISPATCH_TOKEN secret).
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": { "WORKFLOW": "denver.yml" }
+}

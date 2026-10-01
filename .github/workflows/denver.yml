@@ -1,9 +1,9 @@
-name: Morning briefing
+name: Denver briefing
 
 on:
   schedule:
     # Fallback only: GitHub often starts scheduled runs late. The Cloudflare
-    # Worker (src/index.js) dispatches this workflow every 5 minutes on time.
+    # Worker denver-briefing (src/index.js) dispatches this workflow every 5 minutes on time.
     - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
@@ -17,7 +17,7 @@ on:
         default: false
 
 concurrency:
-  group: briefing
+  group: denver-briefing
   cancel-in-progress: false  # a newer run waits; GitHub keeps only the latest one queued
 
 jobs:
@@ -33,7 +33,7 @@ jobs:
           if [ "${{ inputs.force }}" = "true" ] || [ "${{ inputs.ai }}" = "true" ]; then
             echo "Forced rebuild"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          gen=$(curl -s "https://ra-briefing.ra-briefing.workers.dev/?nocache=$(date +%s)" | grep -oE 'name="generated" content="[^"]+"' | cut -d'"' -f4 || true)
+          gen=$(curl -s "https://denver-briefing.ra-briefing.workers.dev/?nocache=$(date +%s)" | grep -oE 'name="generated" content="[^"]+"' | cut -d'"' -f4 || true)
           age=999
           if [ -n "$gen" ]; then age=$(( ($(date +%s) - $(date -d "$gen" +%s)) / 60 )); fi
           if [ "$age" -lt 3 ]; then
@@ -66,9 +66,9 @@ jobs:
         run: |
           # Automatic refreshes are free: no API call, the last analysis is carried over.
           if [ "${{ inputs.ai }}" = "true" ]; then
-            python briefing.py --region alaska
+            python briefing.py --region denver
           else
-            python briefing.py --region alaska --no-ai --reuse-ai https://ra-briefing.ra-briefing.workers.dev/
+            python briefing.py --region denver --no-ai --reuse-ai https://denver-briefing.ra-briefing.workers.dev/
           fi
 
       - name: Deploy to Cloudflare
@@ -78,4 +78,4 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.141.0"
-          command: deploy --config wrangler.jsonc
+          command: deploy --config wrangler.denver.jsonc

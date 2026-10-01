@@ -1,8 +1,9 @@
 // Serves the briefing (static assets in out/) and, every 5 minutes, asks
 // GitHub Actions to rebuild it. Cloudflare cron fires on time; GitHub's own
 // scheduler often runs hours late.
-const DISPATCH_URL =
-  "https://api.github.com/repos/janaleman/ra-briefing/actions/workflows/briefing.yml/dispatches";
+// WORKFLOW (set in each wrangler config) picks which region's workflow to run.
+const dispatchUrl = (workflow) =>
+  `https://api.github.com/repos/janaleman/ra-briefing/actions/workflows/${workflow}/dispatches`;
 
 export default {
   async fetch(request, env) {
@@ -14,7 +15,7 @@ export default {
       console.log("GH_DISPATCH_TOKEN not set; relying on GitHub's schedule");
       return;
     }
-    const res = await fetch(DISPATCH_URL, {
+    const res = await fetch(dispatchUrl(env.WORKFLOW || "briefing.yml"), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${env.GH_DISPATCH_TOKEN}`,

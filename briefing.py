@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Ryan Air morning flight briefing.
+"""Flight briefing generator (Ryan Air Alaska network, Denver area, ...).
 
-Collects weather, hazards, NOTAMs and runway information for the Ryan Air hubs
-and their surrounding villages, scores flyability, and writes a self-contained
-HTML page to out/briefing.html (with a dated copy in out/archive/).
+Collects weather, hazards, NOTAMs and runway information for a region's hubs
+and their surrounding airports/villages, scores flyability, and writes a
+self-contained HTML page to the region's output folder (with a dated copy in
+archive/). Regions are defined in regions.py and chosen with --region.
 
 Sources: aviationweather.gov (METAR, TAF, PIREP, SIGMET, airport data),
 api.weather.gov (AAWU area forecasts/AIRMETs/SIGMETs, forecast discussions,
@@ -11,7 +12,8 @@ alerts, point forecasts), NEXRAD RIDGE radar imagery, Open-Meteo (model
 forecast for villages with no weather station), optional Weather Underground
 PWS (WU_API_KEY) and optional FAA NOTAM API (FAA_CLIENT_ID/FAA_CLIENT_SECRET).
 
-Stdlib only. Usage: python3 briefing.py [--no-ai] [--open]
+Stdlib only (plus `anthropic` for the API narrative).
+Usage: python3 briefing.py [--region alaska|denver] [--no-ai] [--open]
 """
 
 import argparse
@@ -28,81 +30,34 @@ import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from regions import REGIONS
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
-UA = "RyanAirBriefing/1.0 (ops briefing tool)"
-AK_TZ = dt.timezone(dt.timedelta(hours=-8), "AKDT")  # replaced at runtime if zoneinfo available
-try:
-    from zoneinfo import ZoneInfo
-    AK_TZ = ZoneInfo("America/Anchorage")
-except Exception:
-    pass
-
-HUBS = {
-    "PANC": {"name": "Anchorage", "radius": 45, "fa": ["COOK INLET"]},
-    "PANI": {"name": "Aniak", "radius": 90, "fa": ["KUSKOKWIM"]},
-    "PABE": {"name": "Bethel", "radius": 100, "fa": ["KUSKOKWIM DELTA", "Y-K DELTA", "YK DELTA", "KUSKOKWIM"]},
-    "PASM": {"name": "St. Mary's", "radius": 60, "fa": ["LWR YUKON", "Y-K DELTA", "YK DELTA", "KUSKOKWIM DELTA"]},
-    "PAEM": {"name": "Emmonak", "radius": 60, "fa": ["LWR YUKON", "Y-K DELTA", "YK DELTA", "KUSKOKWIM DELTA"]},
-    "PAUN": {"name": "Unalakleet", "radius": 90, "fa": ["NORTON SOUND"]},
-    "PAOM": {"name": "Nome", "radius": 150, "fa": ["SEWARD PEN", "ST LAWRENCE"]},
-    "PAOT": {"name": "Kotzebue", "radius": 150, "fa": ["KOBUK", "NOATAK", "KOTZEBUE"]},
-    "PADQ": {"name": "Kodiak", "radius": 80, "fa": ["KODIAK"]},
-}
-
-# Ryan Air villages and Kodiak-area villages (approximate). Used to fill gaps
-# where no METAR station exists near a served community.
-VILLAGES = {
-    "Anvik": (62.66, -160.19), "Chuathbaluk": (61.57, -159.25), "Crooked Creek": (61.87, -158.11),
-    "Grayling": (62.9, -160.07), "Holy Cross": (62.2, -159.77), "Kalskag": (61.54, -160.31),
-    "Red Devil": (61.76, -157.31), "Russian Mission": (61.79, -161.32), "Shageluk": (62.68, -159.56),
-    "Sleetmute": (61.7, -157.17), "Stony River": (61.78, -156.59),
-    "Akiachak": (60.91, -161.43), "Akiak": (60.91, -161.21), "Atmautluak": (60.87, -162.27),
-    "Chefornak": (60.16, -164.27), "Chevak": (61.53, -165.59), "Eek": (60.22, -162.02),
-    "Goodnews Bay": (59.12, -161.59), "Hooper Bay": (61.53, -166.1), "Kasigluk": (60.89, -162.52),
-    "Kipnuk": (59.94, -164.04), "Kongiganak": (59.96, -162.89), "Kwethluk": (60.81, -161.44),
-    "Kwigillingok": (59.86, -163.13), "Marshall": (61.88, -162.08), "Mekoryuk": (60.39, -166.19),
-    "Napakiak": (60.7, -161.96), "Napaskiak": (60.71, -161.77), "Nightmute": (60.48, -164.72),
-    "Nunapitchuk": (60.9, -162.46), "Platinum": (59.01, -161.82), "Quinhagak": (59.75, -161.9),
-    "Scammon Bay": (61.84, -165.58), "Toksook Bay": (60.53, -165.1), "Tuluksak": (61.1, -160.96),
-    "Tuntutuliak": (60.34, -162.67), "Tununak": (60.58, -165.26),
-    "Alakanuk": (62.69, -164.62), "Kotlik": (63.03, -163.55), "Nunam Iqua": (62.53, -164.85),
-    "Ambler": (67.09, -157.86), "Buckland": (65.98, -161.12), "Deering": (66.08, -162.72),
-    "Kiana": (66.97, -160.43), "Kivalina": (67.73, -164.53), "Kobuk": (66.91, -156.88),
-    "Noatak": (67.57, -162.97), "Noorvik": (66.84, -161.03), "Point Hope": (68.35, -166.76),
-    "Selawik": (66.6, -160.01), "Shungnak": (66.89, -157.14),
-    "Brevig Mission": (65.33, -166.49), "Diomede": (65.76, -168.95), "Elim": (64.62, -162.26),
-    "Gambell": (63.78, -171.74), "Golovin": (64.54, -163.03), "Savoonga": (63.69, -170.48),
-    "Shishmaref": (66.26, -166.07), "Teller": (65.26, -166.36), "Wales": (65.61, -168.09),
-    "White Mountain": (64.68, -163.41),
-    "Mountain Village": (62.09, -163.72), "Pilot Station": (61.94, -162.88),
-    "Koyuk": (64.93, -161.16), "Shaktoolik": (64.36, -161.2), "St. Michael": (63.48, -162.04),
-    "Stebbins": (63.52, -162.29),
-    "Old Harbor": (57.2, -153.3), "Larsen Bay": (57.54, -153.98), "Port Lions": (57.87, -152.88),
-    "Ouzinkie": (57.92, -152.5), "Akhiok": (56.94, -154.17), "Karluk": (57.57, -154.45),
-}
-
-RADARS = [
-    ("ALASKA", "Alaska mosaic"),
-    ("PABC", "Bethel NEXRAD"),
-    ("PAEC", "Nome NEXRAD"),
-    ("PAKC", "King Salmon NEXRAD"),
-    ("PAHG", "Kenai NEXRAD"),
-]
-# GOES-18 (GOES-West) Alaska sector: band directory -> label.
-SAT_CDN = "https://cdn.star.nesdis.noaa.gov/GOES18/ABI/SECTOR/ak"
+UA = "FlightBriefing/1.0 (ops briefing tool)"
+UA_SUFFIX = "(ops briefing tool)"
 SAT_BANDS = [
     ("GEOCOLOR", "GeoColor (true color by day, IR clouds and city lights at night)"),
     ("13", "Clean longwave IR (band 13): cloud-top temperature, day and night"),
     ("AirMass", "Air Mass RGB: jet streaks, dry intrusions and frontal boundaries"),
 ]
 SAT_HOURS, SAT_STEP_MIN = 6, 30
-# AAWU surface analyses: the last four 6-hourly charts, ordered by issue time.
-SFC_ANALYSIS = [f"https://tgftp.nws.noaa.gov/fax/PYCA0{i}.gif" for i in range(4)]
-# OPC Arctic surface analysis plus 24-96 h forecasts (covers all of Alaska).
-SFC_FORECAST = [("https://ocean.weather.gov/shtml/arctic/Arctic_00hrsfc.gif", "Analysis")] + [
-    (f"https://ocean.weather.gov/shtml/arctic/{h}SFC_LATEST.gif", f"+{h} h forecast") for h in (24, 48, 72, 96)]
+
+# Region-specific settings; configure() fills these from regions.py.
+CFG = {}
+HUBS, VILLAGES, RADARS = {}, {}, []
+TZ = ZoneInfo("America/Anchorage")
+
+
+def configure(name):
+    global CFG, HUBS, VILLAGES, RADARS, TZ, OUT
+    CFG = REGIONS[name]
+    HUBS, VILLAGES, RADARS = CFG["hubs"], CFG["villages"], CFG["radars"]
+    TZ = ZoneInfo(CFG["tz"])
+    OUT = HERE / CFG["out"]
+
 
 CAT_ORDER = {"VFR": 0, "MVFR": 1, "IFR": 2, "LIFR": 3}
 SOURCES = {}  # name -> "ok" | error text
@@ -205,7 +160,7 @@ def local(ts):
         t = dt.datetime.fromtimestamp(ts, dt.timezone.utc)
     else:
         t = dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-    return t.astimezone(AK_TZ).strftime("%a %H:%M %Z")
+    return t.astimezone(TZ).strftime("%a %H:%M %Z")
 
 
 def chunks(seq, n):
@@ -217,7 +172,7 @@ def chunks(seq, n):
 
 def collect_stations():
     """All METAR-reporting stations within each hub's radius."""
-    info = awc("stationinfo", bbox="56,-172.8,69.5,-147.5") or []
+    info = awc("stationinfo", bbox=CFG["station_bbox"]) or []
     stations = {}
     for s in info:
         if "METAR" not in (s.get("siteType") or []):
@@ -328,7 +283,7 @@ def parse_fa_zones(fa_products):
 
 def collect_afd():
     out = {}
-    for office in ("AFC", "AFG"):
+    for office in CFG["afd_offices"]:
         lst = get(f"https://api.weather.gov/products/types/AFD/locations/{office}", name="api.weather.gov/AFD")
         if lst and lst.get("@graph"):
             d = get(lst["@graph"][0]["@id"], name="api.weather.gov/AFD")
@@ -345,7 +300,7 @@ def afd_sections(text):
 
 
 def collect_alerts():
-    d = get("https://api.weather.gov/alerts/active?area=AK", name="api.weather.gov/alerts") or {}
+    d = get(f"https://api.weather.gov/alerts/active?area={CFG['alerts_area']}", name="api.weather.gov/alerts") or {}
     return [f["properties"] for f in d.get("features", [])]
 
 
@@ -438,32 +393,35 @@ def classify_notams(items):
 
 
 def collect_satellite():
-    """Download the last SAT_HOURS of GOES-18 Alaska frames per band.
+    """Download the last SAT_HOURS of GOES frames per band for the region's sector.
 
     Returns band -> list of {"src", "label"} (oldest first); files land in out/img/sat/<band>/.
     """
+    sat = CFG["sat"]
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=SAT_HOURS, minutes=5)
     jobs = {}
     for band, _ in SAT_BANDS:
-        listing = get(f"{SAT_CDN}/{band}/", json_=False, name="GOES-18 satellite (NESDIS)")
+        listing = get(f"{sat['cdn']}/{band}/", json_=False, name=f"{sat['name']} satellite (NESDIS)")
         if not listing:
             continue
-        names = sorted(set(re.findall(rf"(\d{{11}})_GOES18-ABI-ak-{re.escape(band)}-1000x1000\.jpg", listing.decode(errors="replace"))))
-        frames = []
-        for stamp in names:
+        names = sorted(set(re.findall(r"(\d{11})_" + re.escape(sat["file"].format(band=band)), listing.decode(errors="replace"))))
+        # Walk back from the newest image, keeping one about every SAT_STEP_MIN minutes
+        # (sectors scan at different minutes past the hour).
+        frames, last = [], None
+        for stamp in reversed(names):
             t = dt.datetime.strptime(stamp, "%Y%j%H%M").replace(tzinfo=dt.timezone.utc)
-            if t >= cutoff and t.minute % SAT_STEP_MIN == 0:
+            if t < cutoff:
+                break
+            if last is None or (last - t) >= dt.timedelta(minutes=SAT_STEP_MIN - 2):
                 frames.append((stamp, t))
-        if names and (not frames or frames[-1][0] != names[-1]):  # always end on the newest image
-            t = dt.datetime.strptime(names[-1], "%Y%j%H%M").replace(tzinfo=dt.timezone.utc)
-            frames.append((names[-1], t))
-        jobs[band] = frames
+                last = t
+        jobs[band] = frames[::-1]
 
     out = {}
     def fetch(band, stamp, t):
         dest = OUT / "img" / "sat" / band / f"{stamp}.jpg"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        b = get(f"{SAT_CDN}/{band}/{stamp}_GOES18-ABI-ak-{band}-1000x1000.jpg", json_=False, name="GOES-18 satellite (NESDIS)")
+        b = get(f"{sat['cdn']}/{band}/{stamp}_{sat['file'].format(band=band)}", json_=False, name=f"{sat['name']} satellite (NESDIS)")
         if not b:
             return None
         dest.write_bytes(b)
@@ -495,21 +453,31 @@ def fetch_with_time(url, dest, name):
 
 
 def collect_surface():
-    """AAWU 6-hourly surface analyses (last 24 h) and the OPC 0-96 h surface forecast sequence."""
+    """Recent surface analyses (oldest first) and the surface forecast sequence for the region."""
+    an_cfg, fc_cfg = CFG["sfc_analysis"], CFG["sfc_forecast"]
     analyses = []
-    for i, url in enumerate(SFC_ANALYSIS):
-        dest = OUT / "img" / "sfc" / f"aawu-{i}.gif"
-        t = fetch_with_time(url, dest, "AAWU surface analysis")
+    for i, url in enumerate(an_cfg["urls"]):
+        dest = OUT / "img" / "sfc" / f"an-{i}.gif"
+        t = fetch_with_time(url, dest, f"{an_cfg['source']} surface analysis")
         if t:
-            valid = t.replace(hour=t.hour - t.hour % 6, minute=0, second=0, microsecond=0)  # nominal synoptic time
-            analyses.append({"src": f"img/sfc/aawu-{i}.gif", "label": valid.strftime("Analysis %HZ %a %b %-d"), "path": str(dest), "t": valid})
+            step = an_cfg["step_h"]
+            valid = t.replace(hour=t.hour - t.hour % step, minute=0, second=0, microsecond=0)  # nominal synoptic time
+            analyses.append({"src": f"img/sfc/an-{i}.gif", "label": valid.strftime("Analysis %HZ %a %b %-d"), "path": str(dest), "t": valid})
     analyses.sort(key=lambda a: a["t"])
     forecast = []
-    for i, (url, label) in enumerate(SFC_FORECAST):
-        dest = OUT / "img" / "sfc" / f"opc-{i}.gif"
-        if fetch_with_time(url, dest, "OPC surface forecast"):
-            forecast.append({"src": f"img/sfc/opc-{i}.gif", "label": label, "path": str(dest)})
+    for i, (url, label) in enumerate(fc_cfg["frames"]):
+        dest = OUT / "img" / "sfc" / f"fc-{i}.gif"
+        if fetch_with_time(url, dest, f"{fc_cfg['source']} surface forecast"):
+            forecast.append({"src": f"img/sfc/fc-{i}.gif", "label": label, "path": str(dest)})
     return analyses, forecast
+
+
+def collect_cwas():
+    """Center Weather Advisories from the region's CWSU (e.g. ZDV for Denver Center)."""
+    cwsu = CFG.get("cwsu")
+    if not cwsu:
+        return []
+    return [c for c in (awc("cwa") or []) if c.get("cwsu") == cwsu]
 
 
 # ---------------------------------------------------------------- analysis
@@ -678,14 +646,29 @@ def score_station(st, metars, taf, model, airport, hazards_here, pireps_near, st
     }
 
 
+# Penalty per G-AIRMET hazard; 0 = informational only (freezing level, high-altitude turbulence).
+G_AIRMET_WEIGHTS = {"IFR": 10, "ICE": 10, "TURB-LO": 8, "SFC_WND": 8, "LLWS": 6, "MT_OBSC": 3,
+                    "TURB-HI": 0, "FZLVL": 0, "M_FZLVL": 0}
+
+
 def hazards_for(lat, lon, fa_zone_hits, gairmets, sigmets_geo):
     out = []
     for s in sigmets_geo:
         if s.get("coords") and point_in_poly(lat, lon, s["coords"]):
             out.append({"label": f"Inside SIGMET: {s.get('hazard')}", "penalty": 30})
+    # G-AIRMETs repeat per forecast hour: count each hazard once, skip high-altitude
+    # turbulence, and cap the combined penalty.
+    seen_g, g_total = set(), 0
     for g in gairmets:
-        if g.get("coords") and point_in_poly(lat, lon, g["coords"]):
-            out.append({"label": f"G-AIRMET {g.get('hazard')} {g.get('severity') or ''}".strip(), "penalty": 10})
+        key = (g.get("hazard"), g.get("severity"))
+        gw = G_AIRMET_WEIGHTS.get(g.get("hazard"), 5)
+        if key in seen_g or not gw or not g.get("coords"):
+            continue
+        if point_in_poly(lat, lon, g["coords"]):
+            seen_g.add(key)
+            w = min(gw, max(0, 20 - g_total))
+            g_total += w
+            out.append({"label": f"G-AIRMET {g.get('hazard')} {g.get('severity') or ''}".strip(), "penalty": w})
     # AAWU AIRMETs: ignore high-altitude turbulence (irrelevant to bush ops),
     # weight by type, dedupe, and cap the combined penalty.
     weights = {"IFR": 10, "ICE": 10, "TURB": 8, "STG SFC WND": 8, "LLWS": 6, "MT OBSC": 3}
@@ -734,19 +717,9 @@ def pressure_analysis(latest):
 
 # ---------------------------------------------------------------- AI narrative
 
-AI_INSTRUCTIONS = """You are an Alaska bush-operations dispatcher meteorologist writing the morning briefing for Ryan Air (Part 135 cargo/passenger carrier, Cessna 207/208, PC-12, CASA 212, Saab 340; mostly day VFR with some IFR capability).
-
-Write the briefing sections below in plain HTML fragments (use only <h3>, <p>, <ul>, <li>, <strong>). No preamble, no markdown, no code fences.
-1. <h3>Synoptic picture</h3>: the weather systems affecting western Alaska and Kodiak/Cook Inlet today: lows and fronts, their movement, and the pressure gradient. Use the surface analyses (how lows and fronts moved over the last 24 h and where the forecast charts take them), the satellite images (cloud shields, frontal bands, dry slots, convection) and the radar images, and say where each feature is.
-2. <h3>Flyability by region</h3>: one bullet per hub (Aniak, Bethel, St. Mary's, Emmonak, Unalakleet, Nome, Kotzebue, Anchorage, Kodiak). Give the go/marginal/poor call for the morning and afternoon and the main limiting factor. Mention villages that stand out.
-3. <h3>Hazards to watch</h3>: icing, turbulence, wind/crosswind, visibility, runway surface concerns and SIGMET/AIRMET areas.
-4. <h3>Best windows</h3>: the best times to launch, and which routes to hold or re-sequence.
-Be concrete and brief (under 450 words). Base everything only on the data given. If data is missing, say so; don't invent it."""
-
-
 def ai_data(summary_json, afd_text, fa_synopsis):
-    return f"""AAWU area forecast synopsis:
-{fa_synopsis}
+    return f"""Area forecast synopsis:
+{fa_synopsis or "n/a"}
 
 NWS forecast discussion excerpts:
 {afd_text[:6000]}
@@ -781,7 +754,7 @@ def ai_narrative_api(summary_json, afd_text, fa_synopsis, images):
             output_config={"effort": "medium"},
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
-            system=AI_INSTRUCTIONS,
+            system=CFG["ai_instructions"],
             messages=[{"role": "user", "content": content}],
         )
     except anthropic.APIStatusError as e:
@@ -800,7 +773,7 @@ def ai_narrative_cli(summary_json, afd_text, fa_synopsis, images):
     if not Path(exe).exists():
         return None, "claude CLI not found"
     imgs = "\n".join(f"- {label}: {p}" for label, p in images)
-    prompt = f"{AI_INSTRUCTIONS}\n\nFirst use the Read tool to look at these images:\n{imgs}\n\n{ai_data(summary_json, afd_text, fa_synopsis)}"
+    prompt = f"{CFG['ai_instructions']}\n\nFirst use the Read tool to look at these images:\n{imgs}\n\n{ai_data(summary_json, afd_text, fa_synopsis)}"
     try:
         r = subprocess.run([exe, "-p", prompt, "--allowedTools", "Read", "--add-dir", str(OUT)],
                            capture_output=True, text=True, timeout=420, cwd=str(OUT))
@@ -822,10 +795,12 @@ def ai_narrative(*a):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--region", default="alaska", choices=sorted(REGIONS), help="which region to brief (see regions.py)")
     ap.add_argument("--no-ai", action="store_true", help="skip the Claude-written narrative")
     ap.add_argument("--open", action="store_true", help="open the briefing in the browser when done")
     ap.add_argument("--reuse-ai", metavar="URL", help="with --no-ai: carry over the last narrative from the live page at URL")
     args = ap.parse_args()
+    configure(args.region)
 
     OUT.mkdir(exist_ok=True)
     (OUT / "img").mkdir(exist_ok=True)
@@ -842,10 +817,11 @@ def main():
         f_metar = ex.submit(collect_metars, ids)
         f_taf = ex.submit(collect_tafs, [i for i in ids if stations[i]["has_taf"]])
         f_apt = ex.submit(collect_airports, ids)
-        f_pirep = ex.submit(awc, "pirep", bbox="55,-175,70,-145", age=12)
+        f_pirep = ex.submit(awc, "pirep", bbox=CFG["pirep_bbox"], age=12)
         f_gair = ex.submit(awc, "gairmet")
-        f_isig = ex.submit(awc, "isigmet")
-        f_aawu = ex.submit(collect_aawu)
+        f_isig = ex.submit(awc, "isigmet") if CFG["aawu"] else ex.submit(awc, "airsigmet")
+        f_aawu = ex.submit(collect_aawu) if CFG["aawu"] else ex.submit(lambda: ([], [], []))
+        f_cwa = ex.submit(collect_cwas)
         f_afd = ex.submit(collect_afd)
         f_alert = ex.submit(collect_alerts)
         f_notam = ex.submit(collect_notams, ids)
@@ -862,7 +838,15 @@ def main():
     metars, tafs, airports = f_metar.result(), f_taf.result(), f_apt.result()
     pireps = f_pirep.result() or []
     gairmets = [g for g in (f_gair.result() or []) if g.get("coords")]
-    isig = [s for s in (f_isig.result() or []) if str(s.get("firId", "")).startswith("PA")]
+    hub_pts = [(stations[h]["lat"], stations[h]["lon"]) for h in HUBS if h in stations]
+    if CFG["aawu"]:
+        isig = [s for s in (f_isig.result() or []) if str(s.get("firId", "")).startswith("PA")]
+    else:
+        # Domestic SIGMETs (convective and non-convective) touching the region.
+        isig = [s for s in (f_isig.result() or []) if s.get("coords") and any(
+            point_in_poly(lat, lon, s["coords"]) for lat, lon in hub_pts)]
+    cwas = [c for c in f_cwa.result() if c.get("coords")]
+    isig += [{**c, "hazard": f"CWA {c.get('hazard')}", "rawSigmet": c.get("cwaText") or c.get("rawCwa") or json.dumps(c)[:600]} for c in cwas]
     fa, wa, aawu_sig = f_aawu.result()
     afd = f_afd.result()
     alerts = f_alert.result()
@@ -873,9 +857,9 @@ def main():
     # Images for the narrative: radar, latest satellite per band, the surface analysis
     # sequence (to show movement) and the forecast charts.
     ai_images = [(f"NEXRAD radar {Path(f).stem}", f) for f in radar_files]
-    ai_images += [(f"GOES-18 {band} satellite, {frames[-1]['label']}", frames[-1]["path"]) for band, frames in sat.items() if frames]
-    ai_images += [(f"AAWU surface {a['label']}", a["path"]) for a in sfc_an]
-    ai_images += [(f"OPC Arctic surface {f['label']}", f["path"]) for f in sfc_fc[1:3]]
+    ai_images += [(f"{CFG['sat']['name']} {band} satellite, {frames[-1]['label']}", frames[-1]["path"]) for band, frames in sat.items() if frames]
+    ai_images += [(f"{CFG['sfc_analysis']['source']} surface {a['label']}", a["path"]) for a in sfc_an[-4:]]
+    ai_images += [(f"{CFG['sfc_forecast']['source']} surface {f['label']}", f["path"]) for f in sfc_fc[1:3]]
 
     # Villages with no METAR station within 8 nm get a model forecast.
     gap_villages = []
@@ -919,7 +903,7 @@ def main():
     for i in ids:
         st = stations[i]
         hub = HUBS[st["hub"]]
-        hit_zones = [z for z in zones if any(k in z for k in hub["fa"])]
+        hit_zones = [z for z in zones if any(k in z for k in hub.get("fa", []))]
         fa_hits = [a for z in hit_zones for a in zone_airmets(zones[z])]
         hz = hazards_for(st["lat"], st["lon"], fa_hits if i in HUBS else fa_hits[:2], gairmets, isig)
         near = []
@@ -962,7 +946,7 @@ def main():
         secs = afd_sections(d["text"])
         for k, v in secs.items():
             if re.search(r"SYNOPSIS|ANALYSIS|SHORT TERM|AVIATION|KEY MESSAGES|DISCUSSION", k):
-                afd_ex.append({"office": "Anchorage (AFC)" if off == "AFC" else "Fairbanks (AFG)", "title": k, "text": v, "time": d["time"]})
+                afd_ex.append({"office": CFG["afd_offices"][off], "title": k, "text": v, "time": d["time"]})
 
     ai_html, ai_status, ai_time = None, "skipped (--no-ai)", now
     if args.no_ai and args.reuse_ai:
@@ -980,7 +964,9 @@ def main():
             "unobserved_villages": [{k: v[k] for k in ("name", "hub", "score", "rating", "reasons")} for v in gap_villages],
             "pressure": pa, "precip_reported": precip_now,
             "airmets": [a for z in zones.values() for a in zone_airmets(z)][:40],
-            "sigmets": [p["text"][:600] for p in aawu_sig],
+            "sigmets": [p["text"][:600] for p in aawu_sig] + [str(s.get("rawSigmet") or s.get("hazard"))[:600] for s in isig],
+            "g_airmets_at_hubs": sorted({f"{g.get('hazard')} {g.get('severity') or ''} {g.get('due_to') or ''}".strip() for g in gairmets
+                                         if any(point_in_poly(stations[h]["lat"], stations[h]["lon"], g["coords"]) for h in HUBS if h in stations)}),
             "pireps": [p["rawOb"] for p in sig_pireps][:20],
             "alerts": [f"{a['event']}: {a['areaDesc'][:120]}" for a in alerts][:20],
         }
@@ -990,10 +976,10 @@ def main():
     print(f"  narrative: {ai_status}", flush=True)
 
     page = render(now, results, gap_villages, zones, fa_synopsis, wa, aawu_sig, isig, gairmets, sig_pireps,
-                  alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc, ai_time)
+                  alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc, ai_time, stations)
     path = OUT / "briefing.html"
     path.write_text(page)
-    stamp = now.astimezone(AK_TZ).strftime("%Y-%m-%d")
+    stamp = now.astimezone(TZ).strftime("%Y-%m-%d")
     (OUT / "archive" / f"briefing-{stamp}.html").write_text(page)
     (OUT / "index.html").write_text(page)  # served at the site root when deployed
     print(f"✓ wrote {path}")
@@ -1034,8 +1020,8 @@ def loop_player(frames, title, note="", lazy=True, start_last=True):
     </div>"""
 
 
-def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc, ai_time):
-    ts = now.astimezone(AK_TZ).strftime("%A %B %-d, %Y · %H:%M %Z")
+def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, alerts, afd_ex, pa, precip_now, ai_html, notam_status, sat, sfc_an, sfc_fc, ai_time, stations):
+    ts = now.astimezone(TZ).strftime("%A %B %-d, %Y · %H:%M %Z")
     hub_cards, hub_details = [], []
     for icao, h in HUBS.items():
         r = R.get(icao)
@@ -1053,7 +1039,7 @@ def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, al
           <div class="score">{r['score']}</div>
           {badge(r['rating'])} {catpill(r['now_cat'])} <span class="muted small">→ {esc(r['fc_cat'] or '—')}</span>
           <p class="small">{esc(r['reasons'][0])}</p>
-          <div class="small muted">Villages: {dist or '—'}</div>
+          <div class="small muted">{esc(CFG['nearby_label'])}: {dist or '—'}</div>
           <div class="small rw rw-{r['runway']['level']}">Runway: {esc(r['runway']['text'].split(' (')[0])}</div>
         </a>""")
 
@@ -1113,11 +1099,11 @@ def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, al
 
     radar_html = "".join(f"""<figure><img src="https://radar.weather.gov/ridge/standard/{r}_loop.gif" loading="lazy" alt="{esc(t)} radar loop" onerror="this.src='img/{r}.gif'"><figcaption>{esc(t)} <a href="https://radar.weather.gov/station/{r.lower()}/standard" target="_blank">↗</a></figcaption></figure>""" for r, t in RADARS)
     sat_tabs = "".join(f'<button type="button" role="tab" data-tab="sat-{esc(b)}" aria-selected="{"true" if i == 0 else "false"}">{esc(lbl.split(" (")[0].split(":")[0])}</button>' for i, (b, lbl) in enumerate(SAT_BANDS))
-    sat_panes = "".join(f'<div class="tabpane" id="sat-{esc(b)}" {"" if i == 0 else "hidden"}>{loop_player(sat.get(b, []), lbl, f"{lbl}. GOES-18 Alaska sector, last {SAT_HOURS} h every {SAT_STEP_MIN} min.")}</div>' for i, (b, lbl) in enumerate(SAT_BANDS))
+    sat_panes = "".join(f'<div class="tabpane" id="sat-{esc(b)}" {"" if i == 0 else "hidden"}>{loop_player(sat.get(b, []), lbl, f"{lbl}. {CFG['sat']['sector_label']}, last {SAT_HOURS} h every {SAT_STEP_MIN} min.")}</div>' for i, (b, lbl) in enumerate(SAT_BANDS))
     sat_html = f'<div class="satwrap"><div class="tabs" role="tablist">{sat_tabs}</div>{sat_panes}</div>'
     sfc_html = f"""<div class="imgs2">
-      <div><h4>Surface analysis, last 24 h (AAWU)</h4>{loop_player(sfc_an, "AAWU surface analysis", "6-hourly analyses from the Alaska Aviation Weather Unit. Watch how the lows and fronts have moved.", start_last=False)}</div>
-      <div><h4>Surface forecast, 0–96 h (OPC)</h4>{loop_player(sfc_fc, "OPC surface forecast", "Ocean Prediction Center Arctic analysis and 24/48/72/96 h forecasts.", start_last=False)}</div>
+      <div><h4>{esc(CFG['sfc_analysis']['heading'])}</h4>{loop_player(sfc_an, CFG['sfc_analysis']['heading'], CFG['sfc_analysis']['note'], start_last=False)}</div>
+      <div><h4>{esc(CFG['sfc_forecast']['heading'])}</h4>{loop_player(sfc_fc, CFG['sfc_forecast']['heading'], CFG['sfc_forecast']['note'], start_last=False)}</div>
     </div>"""
     pa_html = ""
     if pa:
@@ -1131,15 +1117,27 @@ def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, al
         </ul>"""
     afd_html = "".join(f"<details {'open' if i < 2 else ''}><summary>{esc(a['office'])}: {esc(a['title'])} <span class='muted small'>{esc(local(a['time']))}</span></summary><pre>{esc(a['text'])}</pre></details>" for i, a in enumerate(afd_ex))
     sig_html = "".join(f"<pre class='notam ficon'>{esc(p['text'].strip()[:1200])}</pre>" for p in aawu_sig) \
-        + "".join(f"<pre class='notam ficon'>{esc(s.get('rawSigmet') or s.get('hazard'))}</pre>" for s in isig) or "<p class='muted'>No active Alaska SIGMETs.</p>"
+        + "".join(f"<pre class='notam ficon'>{esc(s.get('rawSigmet') or s.get('hazard'))}</pre>" for s in isig) or f"<p class='muted'>No active SIGMETs or CWAs for the {esc(CFG['alerts_label'])} briefing area.</p>"
     wa_html = "".join(f"<details><summary>AIRMET bulletin {esc(local(p['time']))}</summary><pre>{esc(p['text'])}</pre></details>" for p in wa)
+    if not CFG["aawu"]:
+        # Outside Alaska, AIRMETs come as G-AIRMET polygons: list those over the hubs, current or upcoming.
+        rows = {}
+        for g in gairmets:
+            over = [HUBS[h]["name"] for h in HUBS if h in stations and point_in_poly(stations[h]["lat"], stations[h]["lon"], g["coords"])]
+            if over:
+                key = (g.get("hazard"), g.get("severity"), g.get("due_to"))
+                r = rows.setdefault(key, {"hubs": set(), "hours": set(), "base": g.get("base"), "top": g.get("top")})
+                r["hubs"].update(over)
+                r["hours"].add(g.get("forecastHour"))
+        wa_html = "".join(f"<li><b>{esc(k[0])}</b> {esc(k[1] or '')} {esc(k[2] or '')} <span class='muted small'>{esc(r['base'] or '')}–{esc(r['top'] or '')} · +{', +'.join(str(h) for h in sorted(x for x in r['hours'] if x is not None))} h · over {esc(', '.join(sorted(r['hubs'])))}</span></li>" for k, r in sorted(rows.items(), key=lambda kv: str(kv[0])))
+        wa_html = f"<ul>{wa_html}</ul>" if wa_html else ""
     pirep_html = "".join(f"<li class='mono small'>{esc(p['rawOb'])}</li>" for p in pireps[:25]) or "<li class='muted'>No moderate or greater icing or turbulence reports in the last 12 hours.</li>"
     relevant_alerts = [a for a in alerts if not re.search(r"Test", a.get("event", ""))]
-    alert_html = "".join(f"<li><b>{esc(a['event'])}</b>: {esc(a['areaDesc'][:220])} <span class='muted small'>until {esc(local(a.get('ends') or a.get('expires')))}</span></li>" for a in relevant_alerts) or "<li class='muted'>No active NWS alerts for Alaska.</li>"
+    alert_html = "".join(f"<li><b>{esc(a['event'])}</b>: {esc(a['areaDesc'][:220])} <span class='muted small'>until {esc(local(a.get('ends') or a.get('expires')))}</span></li>" for a in relevant_alerts) or f"<li class='muted'>No active NWS alerts for {esc(CFG['alerts_label'])}.</li>"
     src_html = "".join(f"<li><span class='mono'>{esc(k)}</span>: {'✅' if v == 'ok' else '⚠️ ' + esc(v)}</li>" for k, v in sorted(SOURCES.items()))
 
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ryan Air Morning Briefing</title>
+<title>{esc(CFG['page_title'])}</title>
 <meta name="generated" content="{now.isoformat(timespec='seconds')}">
 <meta http-equiv="refresh" content="300">
 <style>
@@ -1173,29 +1171,29 @@ pre{{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);bord
 .cols{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}.warn{{border-left:4px solid var(--marg);padding:10px 14px;background:var(--card);border-radius:8px}}
 @media (max-width:820px){{.grid2,.cols,.imgs2{{grid-template-columns:1fr}}}}
 </style></head><body><div class="wrap">
-<header class="top"><h1>Ryan Air · Morning Flight Briefing</h1><p class="muted">{esc(ts)} · Hubs PANI · PABE · PAOM · PAOT · PAUN · PAEM · PASM · PANC · PADQ</p>
-<p class="warn small">Decision-support summary built from automated data. It is <b>not</b> an official weather briefing. Pilots and dispatch must still get a standard briefing (1-800-WX-BRIEF), check NOTAMs and FICONs, and follow the company's operations specifications.</p></header>
+<header class="top"><h1>{esc(CFG['title'])}</h1><p class="muted">{esc(ts)} · Hubs {' · '.join(HUBS)}</p>
+<p class="warn small">Decision-support summary built from automated data. It is <b>not</b> an official weather briefing. {esc(CFG['disclaimer'])}</p></header>
 
 <h2>Flyability overview</h2>
 <div class="hubs">{''.join(hub_cards)}</div>
-<p class="small muted">The score starts at 100. Points come off for flight category now and forecast, wind, gusts and crosswind, freezing precipitation, thunderstorms, wind shear, icing risk, SIGMET/G-AIRMET areas, AAWU AIRMETs and PIREPs. 75 and up is GOOD, 50–74 MARGINAL, 25–49 POOR, below 25 NO-GO. The forecast window is the next 12 hours.</p>
+<p class="small muted">The score starts at 100. Points come off for flight category now and forecast, wind, gusts and crosswind, freezing precipitation, thunderstorms, wind shear, icing risk, SIGMET/G-AIRMET{"" if CFG["aawu"] else "/CWA"} areas{", AAWU AIRMETs" if CFG["aawu"] else ""} and PIREPs. 75 and up is GOOD, 50–74 MARGINAL, 25–49 POOR, below 25 NO-GO. The forecast window is the next 12 hours.</p>
 
 <h2>Weather systems analysis</h2>
 {f'<p class="small muted">Written by Claude {esc(local(ai_time.timestamp()))}{" from the data at that time. Data, charts and imagery below are current" if ai_time < now - dt.timedelta(minutes=10) else ""}. A new analysis is written when the workflow is run by hand with "Write AI analysis" ticked.</p><div class="card ai"><!--ai-start {ai_time.isoformat(timespec="seconds")}-->{ai_html}<!--ai-end--></div>' if ai_html else '<p class="muted small">The Claude-written narrative wasn\'t generated. See the data below.</p>'}
 <div class="cols" style="margin-top:16px">
   <div class="card"><h4>Surface pressure pattern (METAR)</h4>{pa_html or '<p class="muted">No data</p>'}
-    <h4>AAWU synopsis</h4>{''.join(f'<p>{esc(s)}</p>' for s in fa_syn) or '<p class="muted">No synopsis available</p>'}</div>
+    {(f"<h4>AAWU synopsis</h4>" + (''.join(f'<p>{esc(s)}</p>' for s in fa_syn) or '<p class="muted">No synopsis available</p>')) if CFG["aawu"] else ""}</div>
   <div class="card"><h4>NWS forecast discussions</h4>{afd_html or '<p class="muted">No forecast discussions available</p>'}</div>
 </div>
 <h3 style="margin-top:24px">Surface analysis</h3>
 {sfc_html}
-<h3 style="margin-top:24px">Satellite (GOES-18)</h3>
+<h3 style="margin-top:24px">Satellite ({esc(CFG['sat']['name'])})</h3>
 {sat_html}
 <h3 style="margin-top:24px">NEXRAD radar</h3><div class="imgs">{radar_html}</div>
 
 <h2>Hazards</h2>
 <div class="cols">
-  <div class="card"><h4>SIGMETs (Anchorage FIR)</h4>{sig_html}<h4>AIRMETs (AAWU)</h4>{wa_html or '<p class="muted">None</p>'}</div>
+  <div class="card"><h4>{"SIGMETs (Anchorage FIR)" if CFG["aawu"] else "SIGMETs and Center Weather Advisories"}</h4>{sig_html}<h4>{"AIRMETs (AAWU)" if CFG["aawu"] else "G-AIRMETs over the hubs"}</h4>{wa_html or '<p class="muted">None</p>'}</div>
   <div class="card"><h4>PIREPs: moderate or greater icing/turbulence, last 12h</h4><ul>{pirep_html}</ul><h4>NWS alerts</h4><ul>{alert_html}</ul></div>
 </div>
 
