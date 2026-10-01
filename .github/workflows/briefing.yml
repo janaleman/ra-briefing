@@ -6,6 +6,11 @@ on:
     # Worker (src/index.js) dispatches this workflow every 30 minutes on time.
     - cron: "*/30 * * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild even if the live briefing is fresh"
+        type: boolean
+        default: false
 
 concurrency:
   group: briefing
@@ -21,6 +26,9 @@ jobs:
         run: |
           # Both the Cloudflare cron and GitHub's schedule can start a run;
           # build only if the live briefing is more than 20 minutes old.
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "Forced rebuild"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           gen=$(curl -s "https://ra-briefing.ra-briefing.workers.dev/?nocache=$(date +%s)" | grep -oE 'name="generated" content="[^"]+"' | cut -d'"' -f4 || true)
           age=999
           if [ -n "$gen" ]; then age=$(( ($(date +%s) - $(date -d "$gen" +%s)) / 60 )); fi
