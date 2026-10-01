@@ -2,42 +2,33 @@ name: Morning briefing
 
 on:
   schedule:
-    # GitHub often starts scheduled runs hours late, so try every hour from
-    # 9 AM Denver onward (15:17 UTC in summer, 16:17 in winter). The gate below
-    # builds on the first attempt after 9 AM and skips the rest once today's
-    # briefing is live. :17 avoids the top-of-hour scheduling backlog.
-    - cron: "17 15-23 * * *"
+    # Fallback only: GitHub often starts scheduled runs late. The Cloudflare
+    # Worker (src/index.js) dispatches this workflow every 30 minutes on time.
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 concurrency:
   group: briefing
-  cancel-in-progress: false
+  cancel-in-progress: false  # a newer run waits; GitHub keeps only the latest one queued
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Build once a day, after 9 AM Denver time
+      - name: Skip if a fresh briefing was just published
         id: gate
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          hour=$(TZ=America/Denver date +%-H)
-          if [ "$hour" -lt 9 ]; then
-            echo "Skipping: it is only ${hour}:xx in Denver"
-            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          # The briefing archives itself under the Alaska date; if today's copy
-          # is already live, an earlier run has done the job.
-          today=$(TZ=America/Anchorage date +%F)
-          code=$(curl -sL -o /dev/null -w "%{http_code}" "https://ra-briefing.ra-briefing.workers.dev/archive/briefing-${today}.html")
-          if [ "$code" = "200" ]; then
-            echo "Skipping: briefing for ${today} is already published"
+          # Both the Cloudflare cron and GitHub's schedule can start a run;
+          # build only if the live briefing is more than 20 minutes old.
+          gen=$(curl -s "https://ra-briefing.ra-briefing.workers.dev/?nocache=$(date +%s)" | grep -oE 'name="generated" content="[^"]+"' | cut -d'"' -f4 || true)
+          age=999
+          if [ -n "$gen" ]; then age=$(( ($(date +%s) - $(date -d "$gen" +%s)) / 60 )); fi
+          if [ "$age" -lt 20 ]; then
+            echo "Skipping: live briefing is ${age} min old"
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Building briefing for ${today}"
+            echo "Building (live briefing is ${age} min old)"
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 

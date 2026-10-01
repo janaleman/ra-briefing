@@ -1133,6 +1133,8 @@ def render(now, R, gaps, zones, fa_syn, wa, aawu_sig, isig, gairmets, pireps, al
 
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ryan Air Morning Briefing</title>
+<meta name="generated" content="{now.isoformat(timespec='seconds')}">
+<meta http-equiv="refresh" content="1800">
 <style>
 :root{{--bg:#f5f6f8;--card:#fff;--ink:#101828;--muted:#667085;--line:#e4e7ec;--good:#12805c;--marg:#b98900;--poor:#d0541b;--nogo:#c01d2e;--vfr:#12805c;--mvfr:#1d5fd1;--ifr:#c01d2e;--lifr:#a21caf;--accent:#d9731c}}
 @media (prefers-color-scheme:dark){{:root:not([data-theme=light]){{--bg:#0b1118;--card:#121a24;--ink:#e6edf3;--muted:#8b98a8;--line:#223040;--good:#3fbf8a;--marg:#e0b53a;--poor:#f07d43;--nogo:#f0556a;--vfr:#3fbf8a;--mvfr:#5b9bff;--ifr:#f0556a;--lifr:#d77cf0}}}}
